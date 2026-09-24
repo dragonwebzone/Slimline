@@ -4,6 +4,7 @@ import SwiftUI
 /// clean loop.
 struct RootView: View {
     @State private var photoAccess = PhotoLibraryAccess()
+    @State private var contactsAccess = ContactsAccess()
     @State private var coordinator = ScanCoordinator()
     @State private var lastOutcome: DeletionService.Outcome?
 
@@ -35,6 +36,7 @@ struct RootView: View {
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             photoAccess.refresh()
+            contactsAccess.refresh()
             Task { await coordinator.refreshStorage() }
         }
         .onChange(of: photoAccess.access) { _, access in
@@ -173,8 +175,44 @@ struct RootView: View {
                     bytes: coordinator.videoBytes
                 )
             }
+
+            NavigationLink {
+                DuplicateContactsView(
+                    groups: coordinator.duplicateContacts,
+                    phase: coordinator.contactPhase,
+                    access: contactsAccess.access,
+                    plan: coordinator.plan,
+                    onRequestAccess: {
+                        await contactsAccess.request()
+                        if contactsAccess.access.canScan { coordinator.startContactScan() }
+                    },
+                    onOpenSettings: { contactsAccess.openSettings() },
+                    onScan: { coordinator.startContactScan() }
+                )
+            } label: {
+                CategoryRow(
+                    title: "Duplicate Contacts",
+                    systemImage: "person.2",
+                    // Contacts take up a negligible, unmeasurable amount of space, so this row
+                    // reports a count instead of inventing a byte figure for it.
+                    detail: contactsDetail,
+                    bytes: 0
+                )
+            }
         }
         .buttonStyle(.plain)
+    }
+
+    private var contactsDetail: String {
+        switch coordinator.contactPhase {
+        case .idle: "Not checked yet"
+        case .scanning: "Checking…"
+        case .failed: "Couldn't be read"
+        case .ready:
+            coordinator.duplicateContacts.isEmpty
+                ? "No duplicates"
+                : "\(coordinator.duplicateContacts.count) groups"
+        }
     }
 
     private var reviewButton: some View {
@@ -187,7 +225,7 @@ struct RootView: View {
             }
         } label: {
             HStack {
-                Text("Review \(coordinator.plan.totalAssetCount) selected")
+                Text("Review \(reviewCount) selected")
                     .fontWeight(.semibold)
                 Spacer()
                 Text(ByteFormatting.string(coordinator.plan.totalBytes))
@@ -220,15 +258,38 @@ struct RootView: View {
         .card()
     }
 
-    private func performClean() async {
-        let ids = coordinator.plan.selectedAssetIDs
-        let bytes = coordinator.plan.totalBytes
+    private var reviewCount: Int {
+        coordinator.plan.totalAssetCount + coordinator.plan.totalContactsRemoved
+    }
 
-        let outcome = await deletionService.deleteAssets(ids: ids, expectedBytes: bytes)
+    /// Carries out everything the user approved on the review screen, in one pass.
+    ///
+    /// Merges run before outright contact deletions so a merge can still read every card it needs
+    /// to fold in. Each stage reports separately and the results are combined, so a photo deletion
+    /// failing doesn't hide a successful contact merge.
+    private func performClean() async {
+        let plan = coordinator.plan
+        let assetIDs = plan.selectedAssetIDs
+        let bytes = plan.totalBytes
+        let mergeGroups = plan.mergingGroups
+        let contactIDs = Array(plan.selectedContactIDs)
+
+        var outcome = await deletionService.deleteAssets(ids: assetIDs, expectedBytes: bytes)
+        outcome = outcome.combined(with: await deletionService.mergeContacts(groups: mergeGroups))
+        outcome = outcome.combined(with: await deletionService.deleteContacts(ids: contactIDs))
 
         if outcome.assetsDeleted > 0 {
-            coordinator.removeFromResults(assetIDs: Set(ids))
-            coordinator.plan.reset()
+            coordinator.removeFromResults(assetIDs: Set(assetIDs))
+        }
+
+        if outcome.contactsDeleted > 0 || outcome.contactsMerged > 0 {
+            // Merged cards are gone as surely as deleted ones, so both leave the results.
+            let absorbed = mergeGroups.flatMap { $0.duplicates.map(\.id) }
+            coordinator.removeContactsFromResults(ids: Set(contactIDs).union(absorbed))
+        }
+
+        if outcome.didAnything {
+            plan.reset()
             await coordinator.refreshStorage()
         }
 
@@ -277,6 +338,6 @@ struct CategoryRow: View {
 
 extension DeletionService.Outcome: Identifiable {
     public var id: String {
-        "\(assetsRequested)-\(assetsDeleted)-\(contactsDeleted)-\(bytesPendingReclaim)"
+        "\(assetsRequested)-\(assetsDeleted)-\(contactsDeleted)-\(contactsMerged)-\(bytesPendingReclaim)"
     }
 }

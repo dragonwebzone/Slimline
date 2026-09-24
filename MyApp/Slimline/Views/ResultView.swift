@@ -20,7 +20,9 @@ struct ResultView: View {
                 .font(.title2.weight(.semibold))
                 .multilineTextAlignment(.center)
 
-            if outcome.didAnything {
+            // Only shown when photos actually went. A contacts-only clean frees no measurable
+            // space, and a big "0 bytes" would read as a failure.
+            if outcome.bytesPendingReclaim > 0 {
                 VStack(spacing: 6) {
                     Text(ByteFormatting.string(outcome.bytesPendingReclaim))
                         .font(.largeTitle.weight(.bold))
@@ -50,14 +52,25 @@ struct ResultView: View {
     private var headline: String {
         guard outcome.didAnything else { return "Nothing was removed" }
 
-        var parts: [String] = []
+        var removed: [String] = []
         if outcome.assetsDeleted > 0 {
-            parts.append("\(outcome.assetsDeleted) item\(outcome.assetsDeleted == 1 ? "" : "s")")
+            removed.append("\(outcome.assetsDeleted) item\(outcome.assetsDeleted == 1 ? "" : "s")")
         }
         if outcome.contactsDeleted > 0 {
-            parts.append("\(outcome.contactsDeleted) contact\(outcome.contactsDeleted == 1 ? "" : "s")")
+            removed.append("\(outcome.contactsDeleted) contact\(outcome.contactsDeleted == 1 ? "" : "s")")
         }
-        return "Removed \(parts.formatted(.list(type: .and)))"
+
+        // "Merged" rather than "removed": the details are all still there, just on one card.
+        let mergedCount = outcome.contactsMerged
+        let mergedNoun = "duplicate contact\(mergedCount == 1 ? "" : "s")"
+
+        if removed.isEmpty {
+            return "Merged \(mergedCount) \(mergedNoun)"
+        }
+
+        let removedText = "Removed \(removed.formatted(.list(type: .and)))"
+        guard mergedCount > 0 else { return removedText }
+        return "\(removedText), merged \(mergedCount) \(mergedNoun)"
     }
 }
 
@@ -66,10 +79,15 @@ struct ResultView: View {
         outcome: DeletionService.Outcome(
             assetsRequested: 42,
             assetsDeleted: 42,
-            contactsDeleted: 0,
-            bytesPendingReclaim: 2_300_000_000,
-            failure: nil
+            bytesPendingReclaim: 2_300_000_000
         ),
+        onDone: {}
+    )
+}
+
+#Preview("Contacts only") {
+    ResultView(
+        outcome: DeletionService.Outcome(contactsDeleted: 2, contactsMerged: 3),
         onDone: {}
     )
 }
@@ -78,9 +96,6 @@ struct ResultView: View {
     ResultView(
         outcome: DeletionService.Outcome(
             assetsRequested: 42,
-            assetsDeleted: 0,
-            contactsDeleted: 0,
-            bytesPendingReclaim: 0,
             failure: "Nothing was deleted."
         ),
         onDone: {}

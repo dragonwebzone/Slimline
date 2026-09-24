@@ -15,12 +15,22 @@ final class CleanPlan {
     /// simple removals).
     private(set) var selectedContactIDs: Set<String> = []
 
+    /// Duplicate-contact groups marked to be merged into their primary card.
+    private(set) var mergingGroupIDs: Set<String> = []
+
     /// Assets we refuse to select: the suggested keeper in each similar-photo group.
     private var protectedAssetIDs: Set<String> = []
 
     /// Asset identifier to the group it belongs to, for the "never empty a group" rule.
     private var groupByAsset: [String: String] = [:]
     private var assetsByGroup: [String: Set<String>] = [:]
+
+    /// The same three structures for contacts: the primary card in each duplicate group is
+    /// protected, and a group can never be emptied completely.
+    private var protectedContactIDs: Set<String> = []
+    private var groupByContact: [String: String] = [:]
+    private var contactsByGroup: [String: Set<String>] = [:]
+    private var contactGroupsByID: [String: DuplicateContactGroup] = [:]
 
     // MARK: - Registration
 
@@ -47,6 +57,32 @@ final class CleanPlan {
         for id in protectedAssetIDs where selectedAssets[id] != nil {
             selectedAssets.removeValue(forKey: id)
         }
+    }
+
+    /// Teaches the plan about duplicate-contact groups, with the same guarantees as photos.
+    func register(contactGroups: [DuplicateContactGroup]) {
+        protectedContactIDs.removeAll()
+        groupByContact.removeAll()
+        contactsByGroup.removeAll()
+        contactGroupsByID.removeAll()
+
+        for group in contactGroups {
+            protectedContactIDs.insert(group.primaryContactID)
+            let ids = Set(group.contacts.map(\.id))
+            contactsByGroup[group.id] = ids
+            contactGroupsByID[group.id] = group
+            for id in ids {
+                groupByContact[id] = group.id
+            }
+        }
+
+        // A rescan can promote a different card to primary; drop any selection it just protected.
+        selectedContactIDs.subtract(protectedContactIDs)
+
+        // Forget contacts and merges for groups that no longer exist, so a stale selection can't
+        // survive into a later clean.
+        selectedContactIDs = selectedContactIDs.filter { groupByContact[$0] != nil }
+        mergingGroupIDs = mergingGroupIDs.filter { contactGroupsByID[$0] != nil }
     }
 
     // MARK: - Queries
@@ -82,11 +118,57 @@ final class CleanPlan {
     }
 
     var isEmpty: Bool {
-        selectedAssets.isEmpty && selectedContactIDs.isEmpty
+        selectedAssets.isEmpty && selectedContactIDs.isEmpty && mergingGroupIDs.isEmpty
     }
 
     var selectedAssetIDs: [String] {
         Array(selectedAssets.keys)
+    }
+
+    // MARK: - Contact queries
+
+    func isContactSelected(_ identifier: String) -> Bool {
+        selectedContactIDs.contains(identifier)
+    }
+
+    func isContactProtected(_ identifier: String) -> Bool {
+        protectedContactIDs.contains(identifier)
+    }
+
+    /// Whether deleting this contact is allowed right now.
+    ///
+    /// Refuses the primary card, refuses the selection that would leave a group with nothing, and
+    /// refuses any card in a group already marked for merging — the merge decides that group's
+    /// fate, and letting both act on it would delete a card the merge still needs to read.
+    func canSelectContact(_ identifier: String) -> Bool {
+        if protectedContactIDs.contains(identifier) { return false }
+        guard let groupID = groupByContact[identifier],
+              let members = contactsByGroup[groupID]
+        else { return true }
+
+        if mergingGroupIDs.contains(groupID) { return false }
+
+        let selectedInGroup = members.filter { selectedContactIDs.contains($0) }.count
+        return selectedInGroup + 1 < members.count
+    }
+
+    func isMerging(_ groupID: String) -> Bool {
+        mergingGroupIDs.contains(groupID)
+    }
+
+    /// Groups the user has approved merging, resolved back to their records.
+    var mergingGroups: [DuplicateContactGroup] {
+        mergingGroupIDs.compactMap { contactGroupsByID[$0] }
+    }
+
+    /// Contacts that a merge will remove, over and above those selected outright.
+    var contactsRemovedByMerges: Int {
+        mergingGroups.reduce(0) { $0 + $1.duplicates.count }
+    }
+
+    /// Every contact this plan will remove, whether by merge or by outright deletion.
+    var totalContactsRemoved: Int {
+        selectedContactIDs.count + contactsRemovedByMerges
     }
 
     // MARK: - Mutation
@@ -136,11 +218,36 @@ final class CleanPlan {
         }
     }
 
-    func toggleContact(_ identifier: String) {
+    @discardableResult
+    func selectContact(_ identifier: String) -> Bool {
+        guard canSelectContact(identifier) else { return false }
+        selectedContactIDs.insert(identifier)
+        return true
+    }
+
+    func deselectContact(_ identifier: String) {
+        selectedContactIDs.remove(identifier)
+    }
+
+    @discardableResult
+    func toggleContact(_ identifier: String) -> Bool {
         if selectedContactIDs.contains(identifier) {
-            selectedContactIDs.remove(identifier)
+            deselectContact(identifier)
+            return true
+        }
+        return selectContact(identifier)
+    }
+
+    /// Marks a group to be merged into its primary card, or unmarks it.
+    ///
+    /// Merging supersedes individual deletions in that group, so those selections are cleared —
+    /// otherwise the review screen would count the same contact twice.
+    func toggleMerge(_ group: DuplicateContactGroup) {
+        if mergingGroupIDs.contains(group.id) {
+            mergingGroupIDs.remove(group.id)
         } else {
-            selectedContactIDs.insert(identifier)
+            mergingGroupIDs.insert(group.id)
+            selectedContactIDs.subtract(group.contacts.map(\.id))
         }
     }
 
@@ -148,6 +255,7 @@ final class CleanPlan {
     func reset() {
         selectedAssets.removeAll()
         selectedContactIDs.removeAll()
+        mergingGroupIDs.removeAll()
     }
 
     /// Forgets selections for assets that no longer exist.

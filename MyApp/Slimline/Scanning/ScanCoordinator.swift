@@ -14,11 +14,23 @@ final class ScanCoordinator {
         case failed(String)
     }
 
+    /// The contact scan has no meaningful progress fraction — it's one pass over an address book
+    /// that's small next to a photo library — so it gets a simpler state of its own rather than
+    /// borrowing `Phase` and reporting a fake percentage.
+    enum ContactPhase: Equatable {
+        case idle
+        case scanning
+        case ready
+        case failed(String)
+    }
+
     private(set) var phase: Phase = .idle
+    private(set) var contactPhase: ContactPhase = .idle
 
     private(set) var similarGroups: [SimilarPhotoGroup] = []
     private(set) var screenshots: [AssetRecord] = []
     private(set) var largeVideos: [AssetRecord] = []
+    private(set) var duplicateContacts: [DuplicateContactGroup] = []
     private(set) var storage: StorageSnapshot = .unknown
 
     /// Set when sizes for this category are pixel-based estimates rather than measurements, so
@@ -31,8 +43,10 @@ final class ScanCoordinator {
     private let sizes = AssetSizeProvider()
     private let scanner = SimilarPhotoScanner()
     private let reporter = StorageReporter()
+    private let contactScanner = ContactScanner()
 
     private var scanTask: Task<Void, Never>?
+    private var contactScanTask: Task<Void, Never>?
 
     var isScanning: Bool {
         if case .scanning = phase { return true }
@@ -51,6 +65,11 @@ final class ScanCoordinator {
 
     var videoBytes: Int64 {
         largeVideos.compactMap(\.byteSize).reduce(0, +)
+    }
+
+    /// Contacts that could go, counting each group's duplicates but never its primary card.
+    var removableContactCount: Int {
+        duplicateContacts.reduce(0) { $0 + $1.duplicates.count }
     }
 
     // MARK: - Lifecycle
@@ -72,6 +91,39 @@ final class ScanCoordinator {
         scanTask?.cancel()
         scanTask = nil
         phase = similarGroups.isEmpty ? .idle : .ready
+    }
+
+    /// Scans the address book. Kept separate from the photo scan because it's gated on a different
+    /// permission: a user who grants Photos but refuses Contacts should still get a full photo
+    /// scan, and vice versa.
+    func startContactScan() {
+        guard contactPhase != .scanning else { return }
+
+        contactScanTask?.cancel()
+        contactScanTask = Task { [weak self] in
+            await self?.runContactScan()
+        }
+    }
+
+    private func runContactScan() async {
+        contactPhase = .scanning
+
+        do {
+            let groups = try await contactScanner.scan()
+
+            guard !Task.isCancelled else {
+                contactPhase = .idle
+                return
+            }
+
+            duplicateContacts = groups
+            plan.register(contactGroups: groups)
+            contactPhase = .ready
+        } catch is CancellationError {
+            contactPhase = .idle
+        } catch {
+            contactPhase = .failed("Your contacts couldn't be read. Try again in a moment.")
+        }
     }
 
     private func runScan() async {
@@ -169,5 +221,26 @@ final class ScanCoordinator {
         }
 
         plan.register(groups: similarGroups)
+    }
+
+    /// Drops removed contacts from the results without a full rescan.
+    func removeContactsFromResults(ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+
+        duplicateContacts = duplicateContacts.compactMap { group in
+            let remaining = group.contacts.filter { !ids.contains($0.id) }
+            // Fewer than two cards left means it's no longer a duplicate group.
+            guard remaining.count > 1 else { return nil }
+            let primary = remaining.contains(where: { $0.id == group.primaryContactID })
+                ? group.primaryContactID
+                : ContactGrouping.primaryContactID(in: remaining)
+            return DuplicateContactGroup(
+                id: group.id,
+                contacts: remaining,
+                primaryContactID: primary
+            )
+        }
+
+        plan.register(contactGroups: duplicateContacts)
     }
 }
