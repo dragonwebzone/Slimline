@@ -1,0 +1,26 @@
+# macOS
+.DS_Store
+
+# Xcode — build output and per-user state
+build/
+DerivedData/
+*.xcuserstate
+*.xcuserdatad
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.dSYM
+*.dSYM.zip
+*.ipa
+
+# Note: xcshareddata is deliberately NOT ignored — it holds the shared scheme,
+# without which a fresh clone has nothing to build or test.
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Slimline's feature-print cache lives in the app's Caches directory at runtime,
+# so there is nothing to ignore for it here.

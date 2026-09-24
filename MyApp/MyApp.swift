@@ -1,9 +1,11 @@
 import SwiftUI
 
-@main struct MyApp: App {
+@main
+struct SlimlineApp: App {
     var body: some Scene {
         WindowGroup {
-            ContentView()
+            RootView()
+                .tint(Theme.accent)
         }
     }
 }
