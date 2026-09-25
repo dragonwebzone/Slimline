@@ -36,57 +36,81 @@ struct ReviewView: View {
                 }
             }
 
-            Section {
-                if plan.totalAssetCount > 0 {
-                    Label {
-                        Text("Deleted photos go to **Recently Deleted** in Photos, where iOS keeps them for 30 days. Your storage won't actually drop until you empty that album.")
-                    } icon: {
-                        Image(systemName: "clock.arrow.circlepath")
-                            .foregroundStyle(Theme.reclaimable)
-                    }
-                    .font(.subheadline)
-
-                    Button("Open Photos to empty it") {
-                        openRecentlyDeleted()
-                    }
-                }
-
-                // Contacts have no undo of any kind, unlike photos. Saying so is the difference
-                // between an informed approval and a surprise.
-                if plan.totalContactsRemoved > 0 {
-                    Label {
-                        Text("Contact changes are **permanent** — there's no Recently Deleted for contacts. Merging keeps every phone number and email on the card it keeps.")
-                    } icon: {
-                        Image(systemName: "person.crop.circle.badge.exclamationmark")
-                            .foregroundStyle(Theme.reclaimable)
-                    }
-                    .font(.subheadline)
-                }
-            } header: {
-                Text("What happens next")
-            }
-
-            Section {
-                Button(role: .destructive) {
-                    showConfirmation = true
-                } label: {
-                    HStack {
-                        Spacer()
-                        if isDeleting {
-                            ProgressView()
-                        } else {
-                            Text("Remove \(totalItems) items")
-                                .fontWeight(.semibold)
+            // Only rendered when there's something to say. An empty section still draws its
+            // header, which reads as content that failed to load.
+            if plan.totalAssetCount > 0 || plan.totalContactsRemoved > 0 {
+                Section {
+                    if plan.totalAssetCount > 0 {
+                        Label {
+                            Text("Deleted photos go to **Recently Deleted** in Photos, where iOS keeps them for 30 days. Your storage won't actually drop until you empty that album.")
+                        } icon: {
+                            Image(systemName: "clock.arrow.circlepath")
+                                .foregroundStyle(Theme.warning)
                         }
-                        Spacer()
+                        .font(.subheadline)
+
+                        Button("Open Photos to empty it") {
+                            openRecentlyDeleted()
+                        }
                     }
+
+                    // Contacts have no undo of any kind, unlike photos. Saying so is the
+                    // difference between an informed approval and a surprise.
+                    if plan.totalContactsRemoved > 0 {
+                        Label {
+                            Text("Contact changes are **permanent** — there's no Recently Deleted for contacts. Merging keeps every phone number and email on the card it keeps.")
+                        } icon: {
+                            Image(systemName: "person.crop.circle.badge.exclamationmark")
+                                .foregroundStyle(Theme.warning)
+                        }
+                        .font(.subheadline)
+                    }
+                } header: {
+                    Text("What happens next")
                 }
-                .disabled(plan.isEmpty || isDeleting)
             }
         }
         .navigationTitle("Review")
+        .scrollContentBackground(.hidden)
+        .pageBackground()
+        .safeAreaInset(edge: .bottom) {
+            confirmButton
+        }
+    }
+
+    /// The commit action, pinned to the bottom of the screen.
+    ///
+    /// Previously the last section of the list, which meant it sat wherever the content happened
+    /// to end — halfway up the screen on a short review. The one irreversible action in the app
+    /// should be in the same place every time, and be reachable by thumb.
+    private var confirmButton: some View {
+        Button(role: .destructive) {
+            showConfirmation = true
+        } label: {
+            HStack(spacing: 8) {
+                Spacer()
+                if isDeleting {
+                    ProgressView().tint(.white)
+                    Text("Removing…")
+                        .font(.body.weight(.semibold))
+                } else {
+                    Text("Remove \(itemsPhrase)")
+                        .font(.body.weight(.semibold))
+                }
+                Spacer()
+            }
+            .foregroundStyle(.white)
+            .frame(height: 44)
+            .background(Theme.destructive, in: .rect(cornerRadius: Theme.controlCorner))
+            .opacity(plan.isEmpty || isDeleting ? 0.4 : 1)
+        }
+        .buttonStyle(.plain)
+        .disabled(plan.isEmpty || isDeleting)
+        // Attached to the button rather than to the list: on iOS 26 a confirmation dialog anchors
+        // itself to the view it's modifying, so hanging it off the list pinned the popover to the
+        // top of the screen with its tail pointing at nothing.
         .confirmationDialog(
-            "Remove \(totalItems) items?",
+            "Remove \(itemsPhrase)?",
             isPresented: $showConfirmation,
             titleVisibility: .visible
         ) {
@@ -101,10 +125,25 @@ struct ReviewView: View {
         } message: {
             Text(confirmationMessage)
         }
+        .padding(.horizontal, Theme.screenInset)
+        .padding(.top, 10)
+        .padding(.bottom, 8)
+        // An opaque bar so list rows scrolling underneath never collide with the action.
+        .background {
+            Theme.surface
+                .overlay(alignment: .top) { Theme.divider.frame(height: 1) }
+                .ignoresSafeArea()
+        }
     }
 
     private var totalItems: Int {
         plan.totalAssetCount + plan.totalContactsRemoved
+    }
+
+    /// "1 item" rather than "1 items". The button is the last thing read before an irreversible
+    /// action, which is a poor place to look careless.
+    private var itemsPhrase: String {
+        "\(totalItems) item\(totalItems == 1 ? "" : "s")"
     }
 
     /// Photos get a second, system-level confirmation from PhotoKit; contacts don't. Promising two
@@ -121,5 +160,12 @@ struct ReviewView: View {
     private func openRecentlyDeleted() {
         guard let url = URL(string: "photos-redirect://") else { return }
         UIApplication.shared.open(url)
+    }
+}
+
+#Preview("Short review") {
+    let plan = CleanPlan()
+    return NavigationStack {
+        ReviewView(plan: plan, sizesAreEstimated: true, onConfirm: {})
     }
 }

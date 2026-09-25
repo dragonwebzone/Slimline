@@ -10,22 +10,24 @@ struct PermissionGateView: View {
     let onOpenSettings: () -> Void
 
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Image(systemName: "photo.stack")
-                .font(.system(size: 52))
-                .foregroundStyle(.tint)
+                .font(.system(size: 44))
+                .foregroundStyle(Theme.accent)
                 .accessibilityHidden(true)
 
             Text(title)
-                .font(.title2.weight(.semibold))
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Theme.primaryText)
                 .multilineTextAlignment(.center)
 
             Text(explanation)
-                .font(.body)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
 
             action
+                .frame(maxWidth: 260)
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -57,13 +59,11 @@ struct PermissionGateView: View {
     private var action: some View {
         switch access {
         case .notDetermined:
-            Button("Continue") {
+            PrimaryActionButton(title: "Continue") {
                 Task { await onRequest() }
             }
-            .buttonStyle(.borderedProminent)
         case .denied:
-            Button("Open Settings", action: onOpenSettings)
-                .buttonStyle(.borderedProminent)
+            PrimaryActionButton(title: "Open Settings", action: onOpenSettings)
         case .restricted, .limited, .full:
             EmptyView()
         }

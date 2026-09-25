@@ -143,6 +143,40 @@ struct CleanPlanTests {
         #expect(plan.isEmpty)
     }
 
+    @Test("Promoting a new keeper protects it and frees the old one")
+    func keeperChangeMovesProtection() {
+        // The user overruling the scan's pick must move the protection, not add a second one:
+        // the old keeper becomes deletable and the new one stops being.
+        let plan = CleanPlan()
+        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")])
+
+        #expect(plan.isProtected("a"))
+        #expect(plan.canSelect("b"))
+
+        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "b")])
+
+        #expect(plan.isProtected("b"))
+        #expect(plan.isProtected("a") == false)
+        #expect(plan.canSelect("a"))
+        #expect(plan.canSelect("b") == false)
+    }
+
+    @Test("Promoting a selected photo to keeper unselects it")
+    func promotingASelectedPhotoClearsIt() {
+        // Otherwise the plan would hold a photo that is simultaneously the keeper and queued for
+        // deletion, which is the exact contradiction this type exists to prevent.
+        let plan = CleanPlan()
+        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")])
+
+        #expect(plan.select(record(id: "b")))
+        #expect(plan.isSelected("b"))
+
+        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "b")])
+
+        #expect(plan.isSelected("b") == false)
+        #expect(plan.totalAssetCount == 0)
+    }
+
     @Test("Pruning forgets assets that no longer exist")
     func pruneDropsMissing() {
         let plan = CleanPlan()

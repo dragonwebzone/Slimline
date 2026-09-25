@@ -175,7 +175,8 @@ actor SimilarPhotoScanner {
         return SimilarPhotoGroup(
             id: stored.keeperID,
             assets: members,
-            bestAssetID: stored.keeperID
+            bestAssetID: stored.keeperID,
+            similarity: stored.similarity
         )
     }
 
@@ -368,12 +369,21 @@ actor SimilarPhotoScanner {
                 matchedPairs: pairs,
                 aestheticScores: scores
             )
+            .map { group in
+                var scored = group
+                scored.similarity = similarity(within: group, analyses: analyses)
+                return scored
+            }
             result.append(contentsOf: assembled)
 
             // Recorded even when empty: "this bucket produced no duplicates" is exactly as worth
             // remembering as a positive result, and is the common case.
             byBucket[ScanSnapshot.bucketKey(for: bucket)] = assembled.map {
-                StoredGroup(memberIDs: $0.assets.map(\.id), keeperID: $0.bestAssetID)
+                StoredGroup(
+                    memberIDs: $0.assets.map(\.id),
+                    keeperID: $0.bestAssetID,
+                    similarity: $0.similarity
+                )
             }
 
             onProgress(Progress(stage: .grouping, completed: index + 1, total: buckets.count))
@@ -381,6 +391,29 @@ actor SimilarPhotoScanner {
 
         // Biggest win first: the user cares about reclaimable space, not chronology.
         return (result.sorted { $0.reclaimableBytes > $1.reclaimableBytes }, byBucket)
+    }
+
+    /// How alike the least-alike pair in a group is.
+    ///
+    /// The worst pair rather than the best, because a group is built transitively: A matches B and
+    /// B matches C puts all three together even though A and C were never compared. Reporting the
+    /// closest pair would overstate how alike the group is as a whole.
+    private func similarity(
+        within group: SimilarPhotoGroup,
+        analyses: [String: Analysis]
+    ) -> Double? {
+        let prints = group.assets.compactMap { analyses[$0.id]?.featurePrint }
+        guard prints.count > 1 else { return nil }
+
+        var worst: Double = 0
+        for i in prints.indices {
+            for j in prints.index(after: i)..<prints.endIndex {
+                guard let distance = try? prints[i].distance(to: prints[j]) else { continue }
+                worst = max(worst, distance)
+            }
+        }
+
+        return max(0, 1 - worst)
     }
 
     /// Whether two photos are the same shot rather than merely the same place.

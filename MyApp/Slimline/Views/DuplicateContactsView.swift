@@ -14,6 +14,10 @@ struct DuplicateContactsView: View {
     let onRequestAccess: () async -> Void
     let onOpenSettings: () -> Void
     let onScan: () -> Void
+    /// Explicit retry, which must run even when the last attempt left the phase at `.failed`.
+    let onRescan: () -> Void
+    /// Promotes a card to be the one kept, and the one a merge folds everything into.
+    let onMakePrimary: (String, String) -> Void
 
     var body: some View {
         Group {
@@ -23,62 +27,63 @@ struct DuplicateContactsView: View {
                 gate
             }
         }
-        .navigationTitle("Duplicate Contacts")
+        .pageBackground()
     }
 
     // MARK: - Results
 
-    @ViewBuilder
     private var content: some View {
-        List {
-            if access == .limited {
-                Section {
-                    Label(
+        ScrollView {
+            LazyVStack(spacing: Theme.sectionSpacing) {
+                if !groups.isEmpty {
+                    summaryCard
+                }
+
+                if access == .limited {
+                    notice(
                         "Slimline can only see the contacts you shared, so these results cover that selection — not your whole address book.",
                         systemImage: "exclamationmark.triangle.fill"
                     )
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
                 }
-            }
 
-            if case .failed(let message) = phase {
-                Section {
-                    Label(message, systemImage: "exclamationmark.triangle")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
-                    Button("Try again", action: onScan)
-                }
-            }
-
-            ForEach(groups) { group in
-                section(for: group)
-            }
-        }
-        .toolbar {
-            ToolbarItem(placement: .topBarTrailing) {
-                Button(allMerging ? "Undo All" : "Merge All") {
-                    for group in groups {
-                        if plan.isMerging(group.id) == allMerging {
-                            plan.toggleMerge(group)
-                        }
+                if case .failed(let message) = phase {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Label(message, systemImage: "exclamationmark.triangle.fill")
+                            .font(.system(size: 13))
+                            .foregroundStyle(Theme.secondaryText)
+                        Button("Try again", action: onRescan)
+                            .font(.system(size: 14, weight: .medium))
+                            .foregroundStyle(Theme.accent)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .card()
                 }
-                .disabled(groups.isEmpty)
+
+                ForEach(groups) { group in
+                    ContactGroupCard(
+                        group: group,
+                        plan: plan,
+                        onMakePrimary: { onMakePrimary($0, group.id) }
+                    )
+                }
             }
+            .padding(Theme.screenInset)
         }
         .overlay {
             switch phase {
             case .scanning:
                 ProgressView("Checking your contacts…")
+                    .tint(Theme.accent)
+                    .foregroundStyle(Theme.secondaryText)
             case .idle where groups.isEmpty:
                 ContentUnavailableView {
                     Label("Not checked yet", systemImage: "person.2")
                 } description: {
                     Text("Look through your contacts for duplicate entries.")
                 } actions: {
-                    Button("Check contacts", action: onScan)
+                    Button("Check contacts", action: onRescan)
                         .buttonStyle(.borderedProminent)
+                        .tint(Theme.accent)
                 }
             case .ready where groups.isEmpty:
                 ContentUnavailableView(
@@ -91,124 +96,70 @@ struct DuplicateContactsView: View {
             }
         }
         .task {
-            // Only scan on first arrival; coming back from the review screen shouldn't throw away
-            // the selections the user just made.
-            if phase == .idle { onScan() }
+            // Safe to call on every appearance: the coordinator ignores this once a scan is
+            // running or has finished, so returning to the tab never re-scans or discards the
+            // selections the user just made.
+            onScan()
         }
     }
 
-    private func section(for group: DuplicateContactGroup) -> some View {
-        Section {
-            ForEach(group.contacts) { contact in
-                row(for: contact, in: group)
+    private var summaryCard: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .top) {
+                VStack(alignment: .leading, spacing: 4) {
+                    SectionHeading("Duplicate Entries")
+                    HStack(alignment: .firstTextBaseline, spacing: 6) {
+                        Text("\(removableCount)")
+                            .font(.system(size: 34, weight: .bold))
+                            .foregroundStyle(Theme.primaryText)
+                            .contentTransition(.numericText())
+                        Text(removableCount == 1 ? "card to tidy" : "cards to tidy")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.secondaryText)
+                    }
+                }
+                Spacer()
+                Chip(text: "\(groups.count) sets")
             }
+
+            Text("Merging folds every phone number and email onto the starred card. Tap a star to keep a different one. Contact changes can't be undone.")
+                .font(.system(size: 12))
+                .foregroundStyle(Theme.secondaryText)
 
             Button {
-                plan.toggleMerge(group)
-            } label: {
-                Label(
-                    plan.isMerging(group.id) ? "Merging — tap to undo" : "Merge into one contact",
-                    systemImage: plan.isMerging(group.id)
-                        ? "checkmark.circle.fill"
-                        : "arrow.triangle.merge"
-                )
-                .font(.subheadline.weight(.medium))
-            }
-            .foregroundStyle(Theme.accent)
-
-            if plan.isMerging(group.id) {
-                mergePreview(for: group)
-            }
-        } header: {
-            HStack {
-                Text(group.primary.displayName)
-                Spacer()
-                Text(group.reason)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        } footer: {
-            Text("\(group.contacts.count) entries look like the same person.")
-        }
-    }
-
-    private func row(for contact: ContactRecord, in group: DuplicateContactGroup) -> some View {
-        HStack(spacing: 12) {
-            if plan.isContactProtected(contact.id) {
-                Image(systemName: "star.fill")
-                    .font(.footnote)
-                    .foregroundStyle(Theme.reclaimable)
-                    .frame(width: 22)
-                    .accessibilityLabel("Suggested to keep")
-            } else {
-                Button {
-                    plan.toggleContact(contact.id)
-                } label: {
-                    Image(
-                        systemName: plan.isContactSelected(contact.id)
-                            ? "checkmark.circle.fill"
-                            : "circle"
-                    )
-                    .font(.title3)
-                    .foregroundStyle(plan.isContactSelected(contact.id) ? Theme.accent : .secondary)
+                withAnimation(.snappy) {
+                    for group in groups where plan.isMerging(group.id) == allMerging {
+                        plan.toggleMerge(group)
+                    }
                 }
-                .buttonStyle(.plain)
-                .frame(width: 22)
-                .disabled(!canToggle(contact))
-                .accessibilityLabel(
-                    plan.isContactSelected(contact.id) ? "Selected for deletion" : "Not selected"
-                )
+            } label: {
+                Text(allMerging ? "Undo all merges" : "Merge all \(groups.count) sets")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .frame(maxWidth: .infinity)
+                    .padding(.vertical, 8)
+                    .background(Theme.background, in: .rect(cornerRadius: Theme.controlCorner))
+                    .overlay {
+                        RoundedRectangle(cornerRadius: Theme.controlCorner)
+                            .strokeBorder(Theme.divider, lineWidth: 1)
+                    }
             }
-
-            VStack(alignment: .leading, spacing: 2) {
-                Text(contact.displayName)
-                    .font(.body.weight(plan.isContactProtected(contact.id) ? .semibold : .regular))
-                Text(contact.detail)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-
-            Spacer()
-
-            if plan.isContactProtected(contact.id) {
-                Text("Keep")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-            }
+            .buttonStyle(.plain)
+            .disabled(groups.isEmpty)
         }
-        .opacity(plan.isMerging(group.id) && !plan.isContactProtected(contact.id) ? 0.5 : 1)
+        .card()
     }
 
-    /// Shows the card the merge will produce. The same `mergedFields` call performs the merge, so
-    /// this preview can't drift from the result.
-    private func mergePreview(for group: DuplicateContactGroup) -> some View {
-        let fields = ContactGrouping.mergedFields(for: group)
-
-        return VStack(alignment: .leading, spacing: 4) {
-            Text("Kept as one contact")
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(.secondary)
-
-            Text([fields.givenName, fields.familyName].filter { !$0.isEmpty }.joined(separator: " "))
-                .font(.subheadline.weight(.medium))
-
-            ForEach(fields.phoneNumbers, id: \.self) { number in
-                Label(number, systemImage: "phone")
-                    .font(.caption)
-            }
-            ForEach(fields.emailAddresses, id: \.self) { email in
-                Label(email, systemImage: "envelope")
-                    .font(.caption)
-            }
-        }
-        .foregroundStyle(.secondary)
+    private func notice(_ text: String, systemImage: String) -> some View {
+        Label(text, systemImage: systemImage)
+            .font(.system(size: 12))
+            .foregroundStyle(Theme.warning)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .card(padding: 12)
     }
 
-    /// A card already covered by a merge can't also be deleted outright — the merge needs to read
-    /// it, and counting it twice would overstate what the review screen is about to remove.
-    private func canToggle(_ contact: ContactRecord) -> Bool {
-        plan.isContactSelected(contact.id) || plan.canSelectContact(contact.id)
+    private var removableCount: Int {
+        groups.reduce(0) { $0 + $1.duplicates.count }
     }
 
     private var allMerging: Bool {
@@ -217,34 +168,34 @@ struct DuplicateContactsView: View {
 
     // MARK: - Permission
 
-    /// Contacts access is asked for here rather than at launch: the user has just tapped into the
-    /// contacts feature, so the reason for the prompt is obvious. The photo gate handles its own
-    /// permission the same way at the root.
+    /// Contacts access is asked for here rather than at launch: the user has just opened the
+    /// contacts tab, so the reason for the prompt is obvious.
     private var gate: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 16) {
             Image(systemName: "person.2.slash")
-                .font(.system(size: 52))
-                .foregroundStyle(.tint)
+                .font(.system(size: 44))
+                .foregroundStyle(Theme.accent)
                 .accessibilityHidden(true)
 
             Text(gateTitle)
-                .font(.title2.weight(.semibold))
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Theme.primaryText)
                 .multilineTextAlignment(.center)
 
             Text(gateExplanation)
-                .font(.body)
-                .foregroundStyle(.secondary)
+                .font(.system(size: 14))
+                .foregroundStyle(Theme.secondaryText)
                 .multilineTextAlignment(.center)
 
             switch access {
             case .notDetermined:
-                Button("Continue") {
+                PrimaryActionButton(title: "Continue") {
                     Task { await onRequestAccess() }
                 }
-                .buttonStyle(.borderedProminent)
+                .frame(maxWidth: 260)
             case .denied:
-                Button("Open Settings", action: onOpenSettings)
-                    .buttonStyle(.borderedProminent)
+                PrimaryActionButton(title: "Open Settings", action: onOpenSettings)
+                    .frame(maxWidth: 260)
             case .restricted, .limited, .full:
                 EmptyView()
             }
@@ -273,5 +224,202 @@ struct DuplicateContactsView: View {
         case .limited, .full:
             ""
         }
+    }
+}
+
+/// One set of contacts that look like the same person.
+private struct ContactGroupCard: View {
+    let group: DuplicateContactGroup
+    let plan: CleanPlan
+    let onMakePrimary: (String) -> Void
+
+    private var isMerging: Bool { plan.isMerging(group.id) }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            header
+
+            VStack(spacing: 0) {
+                ForEach(Array(group.contacts.enumerated()), id: \.element.id) { index, contact in
+                    if index > 0 {
+                        Divider().overlay(Theme.divider)
+                    }
+                    row(for: contact)
+                }
+            }
+            .background(Theme.background, in: .rect(cornerRadius: Theme.innerCorner))
+            .overlay {
+                RoundedRectangle(cornerRadius: Theme.innerCorner)
+                    .strokeBorder(Theme.divider, lineWidth: 1)
+            }
+
+            mergeButton
+
+            if isMerging {
+                mergePreview
+            }
+        }
+        .card(padding: 12)
+    }
+
+    private var header: some View {
+        HStack(alignment: .top) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(group.primary.displayName)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.primaryText)
+                Text("\(group.contacts.count) entries look like the same person")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer(minLength: 8)
+            // Why these were matched, so the suggestion is never a black box.
+            Chip(text: group.reason)
+        }
+    }
+
+    private func row(for contact: ContactRecord) -> some View {
+        let isProtected = plan.isContactProtected(contact.id)
+        let isSelected = plan.isContactSelected(contact.id)
+
+        return HStack(spacing: 10) {
+            // A star on every row, tappable on all but the current keeper. The scan's choice is
+            // the most complete card, which is a good guess and not always the right one — the
+            // user may want their own spelling of a name, or a specific card's photo.
+            Button {
+                withAnimation(.snappy) { onMakePrimary(contact.id) }
+            } label: {
+                Image(systemName: isProtected ? "star.fill" : "star")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(isProtected ? .white : Theme.secondaryText)
+                    .frame(width: 22, height: 22)
+                    .background(isProtected ? Theme.accent : Theme.surface, in: .circle)
+                    .overlay(
+                        Circle().strokeBorder(
+                            isProtected ? Theme.accent : Theme.divider,
+                            lineWidth: 1
+                        )
+                    )
+                    .frame(width: 34, height: 30)
+                    .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+            .disabled(isProtected)
+            .accessibilityLabel(isProtected ? "Kept card" : "Keep this card instead")
+
+            // The kept card gets a blank of the same size rather than nothing, so names stay in
+            // one column instead of jumping left on whichever row happens to be starred.
+            if isProtected {
+                Circle()
+                    .fill(Theme.surface.opacity(0.5))
+                    .frame(width: 22, height: 22)
+                    .overlay(Circle().strokeBorder(Theme.divider, lineWidth: 1))
+            } else {
+                Button {
+                    plan.toggleContact(contact.id)
+                } label: {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
+                        .foregroundStyle(isSelected ? .white : .clear)
+                        .frame(width: 22, height: 22)
+                        .background(isSelected ? Theme.accent : Theme.surface, in: .circle)
+                        .overlay(
+                            Circle().strokeBorder(
+                                isSelected ? Theme.accent : Theme.divider,
+                                lineWidth: 1
+                            )
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(!canToggle(contact))
+                .accessibilityLabel(isSelected ? "Selected for deletion" : "Not selected")
+            }
+
+            VStack(alignment: .leading, spacing: 1) {
+                Text(contact.displayName)
+                    .font(.system(size: 14, weight: isProtected ? .semibold : .regular))
+                    .foregroundStyle(Theme.primaryText)
+                Text(contact.detail)
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.secondaryText)
+                    .lineLimit(2)
+            }
+
+            Spacer(minLength: 4)
+
+            Text(isProtected ? "Keep" : (isSelected ? "Delete" : "Review"))
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(isSelected ? Theme.destructive : Theme.secondaryText)
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 9)
+        .opacity(isMerging && !isProtected ? 0.45 : 1)
+    }
+
+    private var mergeButton: some View {
+        Button {
+            withAnimation(.snappy) { plan.toggleMerge(group) }
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: isMerging ? "checkmark.circle.fill" : "arrow.triangle.merge")
+                    .font(.system(size: 13, weight: .medium))
+                Text(isMerging ? "Merging — tap to undo" : "Merge into one contact")
+                    .font(.system(size: 13, weight: .semibold))
+                Spacer()
+            }
+            .foregroundStyle(isMerging ? .white : Theme.accent)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 9)
+            .background(
+                isMerging ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.background),
+                in: .rect(cornerRadius: Theme.controlCorner)
+            )
+            .overlay {
+                if !isMerging {
+                    RoundedRectangle(cornerRadius: Theme.controlCorner)
+                        .strokeBorder(Theme.divider, lineWidth: 1)
+                }
+            }
+        }
+        .buttonStyle(.plain)
+    }
+
+    /// Shows the card the merge will produce. The same `mergedFields` call performs the merge, so
+    /// this preview can't drift from the result.
+    private var mergePreview: some View {
+        let fields = ContactGrouping.mergedFields(for: group)
+
+        return VStack(alignment: .leading, spacing: 5) {
+            SectionHeading("Kept as one contact")
+
+            Text([fields.givenName, fields.familyName].filter { !$0.isEmpty }.joined(separator: " "))
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(Theme.primaryText)
+
+            ForEach(fields.phoneNumbers, id: \.self) { number in
+                Label(number, systemImage: "phone")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            ForEach(fields.emailAddresses, id: \.self) { email in
+                Label(email, systemImage: "envelope")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(10)
+        .background(Theme.background, in: .rect(cornerRadius: Theme.innerCorner))
+        .overlay {
+            RoundedRectangle(cornerRadius: Theme.innerCorner)
+                .strokeBorder(Theme.divider, lineWidth: 1)
+        }
+        .transition(.opacity.combined(with: .move(edge: .top)))
+    }
+
+    /// A card already covered by a merge can't also be deleted outright — the merge needs to read
+    /// it, and counting it twice would overstate what the review screen is about to remove.
+    private func canToggle(_ contact: ContactRecord) -> Bool {
+        plan.isContactSelected(contact.id) || plan.canSelectContact(contact.id)
     }
 }

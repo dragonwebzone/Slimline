@@ -1,4 +1,5 @@
 import Contacts
+import os
 import Photos
 
 /// Carries out an approved clean, and reports what actually happened.
@@ -167,6 +168,7 @@ actor DeletionService {
                 try store.execute(request)
                 merged += absorbed
             } catch {
+                Self.log(error, whileMerging: group)
                 failures += 1
             }
         }
@@ -216,6 +218,28 @@ actor DeletionService {
             )
         }
     }
+
+    /// Records why a merge failed.
+    ///
+    /// `CNError` codes are the only way to tell "you handed me a contact you can't save" apart
+    /// from "the record went away" apart from "permission", and the user-facing message
+    /// deliberately says none of that. Without this the failure is a dead end.
+    private static func log(_ error: Error, whileMerging group: DuplicateContactGroup) {
+        let nsError = error as NSError
+        mergeLog.error(
+            """
+            merge failed domain=\(nsError.domain, privacy: .public) \
+            code=\(nsError.code, privacy: .public) \
+            cards=\(group.contacts.count, privacy: .public) \
+            description=\(nsError.localizedDescription, privacy: .public)
+            """
+        )
+    }
+
+    private static let mergeLog = Logger(
+        subsystem: "com.rishichipra.slimline",
+        category: "contact-merge"
+    )
 
     /// Re-fetches a contact by identifier, for the same reason assets are re-fetched: a stale
     /// record then can't cause the wrong card to be changed.

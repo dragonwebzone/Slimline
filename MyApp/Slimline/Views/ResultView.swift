@@ -9,44 +9,63 @@ struct ResultView: View {
     let outcome: DeletionService.Outcome
     let onDone: () -> Void
 
+    @State private var hasAppeared = false
+
     var body: some View {
-        VStack(spacing: 20) {
+        VStack(spacing: 0) {
+            Spacer()
+
             Image(systemName: outcome.didAnything ? "checkmark.circle.fill" : "exclamationmark.circle")
-                .font(.system(size: 56))
-                .foregroundStyle(outcome.didAnything ? Theme.accent : .secondary)
+                .font(.system(size: 60))
+                .foregroundStyle(outcome.didAnything ? Theme.accent : Theme.secondaryText)
+                .scaleEffect(hasAppeared ? 1 : 0.6)
+                .opacity(hasAppeared ? 1 : 0)
                 .accessibilityHidden(true)
 
             Text(headline)
-                .font(.title2.weight(.semibold))
+                .font(.system(size: 20, weight: .semibold))
+                .foregroundStyle(Theme.primaryText)
                 .multilineTextAlignment(.center)
+                .padding(.top, 20)
 
             // Only shown when photos actually went. A contacts-only clean frees no measurable
             // space, and a big "0 bytes" would read as a failure.
             if outcome.bytesPendingReclaim > 0 {
-                VStack(spacing: 6) {
+                VStack(spacing: 4) {
                     Text(ByteFormatting.string(outcome.bytesPendingReclaim))
-                        .font(.largeTitle.weight(.bold))
+                        .font(.system(size: 40, weight: .bold))
                         .foregroundStyle(Theme.accent)
-                    Text("will be reclaimed once you empty Recently Deleted")
-                        .font(.subheadline)
-                        .foregroundStyle(.secondary)
+                        .contentTransition(.numericText())
+                    Text("will be reclaimed once you empty Recently Deleted in Photos")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.secondaryText)
                         .multilineTextAlignment(.center)
                 }
                 .card()
+                .padding(.top, 24)
             }
 
             if let failure = outcome.failure {
-                Text(failure)
-                    .font(.subheadline)
-                    .foregroundStyle(.secondary)
+                Label(failure, systemImage: "info.circle")
+                    .font(.system(size: 13))
+                    .foregroundStyle(Theme.secondaryText)
                     .multilineTextAlignment(.center)
+                    .padding(.top, 20)
             }
 
-            Button("Done", action: onDone)
-                .buttonStyle(.borderedProminent)
+            Spacer()
+
+            PrimaryActionButton(title: "Done", action: onDone)
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .pageBackground()
+        .presentationDragIndicator(.visible)
+        .task {
+            // A small settle on the checkmark. The result screen is the one place in the app
+            // where a moment of feedback is the entire point of the screen.
+            withAnimation(.bouncy(duration: 0.5)) { hasAppeared = true }
+        }
     }
 
     private var headline: String {

@@ -57,11 +57,46 @@ nonisolated struct SimilarPhotoGroup: Sendable, Identifiable {
     /// The one we suggest keeping. Never pre-selected for deletion.
     let bestAssetID: String
 
+    /// How alike the least-alike pair in this group is, from 0 to 1.
+    ///
+    /// Derived from Vision feature-print distance — `1 - distance` for the worst pair, so the
+    /// figure describes the whole group rather than its closest two members. `nil` when the group
+    /// came from a cache written before this was recorded.
+    var similarity: Double?
+
     var others: [AssetRecord] { assets.filter { $0.id != bestAssetID } }
 
     /// What deleting everything except the best shot would reclaim.
     var reclaimableBytes: Int64 {
         others.compactMap(\.byteSize).reduce(0, +)
+    }
+
+    /// Effectively the same file rather than merely the same moment.
+    ///
+    /// The cutoff is deliberately tight. Anything this close is a copy, a re-save or a burst frame
+    /// the camera took without being asked; above it, the shots differ in ways a person might
+    /// actually care about.
+    var isDuplicate: Bool {
+        (similarity ?? 0) >= 0.97
+    }
+
+    /// "99% similar", for display. Rounded down so the app never rounds 98.6 up to a confident
+    /// "99" it can't justify.
+    var similarityLabel: String? {
+        guard let similarity else { return nil }
+        return "\(Int(similarity * 100))% similar"
+    }
+
+    init(
+        id: String,
+        assets: [AssetRecord],
+        bestAssetID: String,
+        similarity: Double? = nil
+    ) {
+        self.id = id
+        self.assets = assets
+        self.bestAssetID = bestAssetID
+        self.similarity = similarity
     }
 }
 

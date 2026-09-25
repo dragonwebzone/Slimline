@@ -5,6 +5,9 @@ import Foundation
 nonisolated struct StoredGroup: Codable, Sendable, Hashable {
     let memberIDs: [String]
     let keeperID: String
+    /// Optional so snapshots written before similarity was recorded still decode; a `nil` simply
+    /// means the group shows no percentage until the next full rescan.
+    var similarity: Double?
 }
 
 /// Everything a finished scan produced, in a form that can be reloaded on the next launch.
