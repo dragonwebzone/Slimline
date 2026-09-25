@@ -15,8 +15,14 @@ actor FeaturePrintCache {
     nonisolated struct Entry: Codable, Sendable {
         /// `modificationDate` as a time interval. A change invalidates the print.
         let modificationStamp: Double
-        /// An encoded `FeaturePrintObservation`.
+        /// An encoded `FeaturePrintObservation` for the whole frame.
         let payload: Data
+        /// An encoded `FeaturePrintObservation` for the centre of the frame.
+        ///
+        /// Optional only so that caches written before this existed still decode. A `nil` here is
+        /// treated as a miss, so those entries are regenerated rather than compared on the
+        /// whole-frame print alone.
+        let centerPayload: Data?
         /// Vision's aesthetics score, cached alongside so best-shot picking is also incremental.
         let aestheticScore: Float?
     }

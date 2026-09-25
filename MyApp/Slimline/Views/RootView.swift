@@ -71,9 +71,12 @@ struct RootView: View {
             }
             .padding(16)
         }
+        // Pull to refresh forces a full rescan. Launching only picks up what's new, so this is
+        // the deliberate "check everything again" gesture — and the way out if a result ever
+        // looks wrong.
         .refreshable {
             await coordinator.refreshStorage()
-            coordinator.startScan()
+            coordinator.startScan(force: true)
         }
     }
 
@@ -111,7 +114,7 @@ struct RootView: View {
                     .font(.subheadline)
                     .foregroundStyle(.secondary)
                 Spacer()
-                Button("Scan again") { coordinator.startScan() }
+                Button("Scan again") { coordinator.startScan(force: true) }
                     .font(.subheadline)
             }
             .card()

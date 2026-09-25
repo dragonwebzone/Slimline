@@ -44,6 +44,7 @@ final class ScanCoordinator {
     private let scanner = SimilarPhotoScanner()
     private let reporter = StorageReporter()
     private let contactScanner = ContactScanner()
+    private let snapshots = ScanSnapshotStore()
 
     private var scanTask: Task<Void, Never>?
     private var contactScanTask: Task<Void, Never>?
@@ -78,12 +79,12 @@ final class ScanCoordinator {
         storage = (try? await reporter.snapshot()) ?? .unknown
     }
 
-    func startScan() {
+    func startScan(force: Bool = false) {
         guard !isScanning else { return }
 
         scanTask?.cancel()
         scanTask = Task { [weak self] in
-            await self?.runScan()
+            await self?.runScan(force: force)
         }
     }
 
@@ -126,24 +127,40 @@ final class ScanCoordinator {
         }
     }
 
-    private func runScan() async {
-        phase = .scanning(stage: .preparing, fraction: 0)
-
+    private func runScan(force: Bool) async {
         // `dataSize` is iOS 27+, so on earlier systems photo sizes come from a pixel estimate.
         // Track that up front rather than inferring it later.
         photoSizesAreEstimated = !isExactPhotoSizingAvailable
 
+        var snapshot = force ? ScanSnapshot() : await snapshots.load()
+
+        // A warm start usually has nothing to do, so it stays silent until real work turns up.
+        // Showing a progress bar that completes instantly on every launch reads as "it rescanned
+        // my whole library again", which is exactly the impression the snapshot exists to avoid.
+        let isWarmStart = !snapshot.bucketGroups.isEmpty
+        if !isWarmStart {
+            phase = .scanning(stage: .preparing, fraction: 0)
+        }
+
         let all = await index.fetchAll()
+        let currentStamps = Self.stamps(for: all)
 
         async let screenshotRecords = index.fetchScreenshots()
         async let videoRecords = index.fetchVideos()
 
-        let resolvedScreenshots = await sizes.resolveSizes(for: screenshotRecords)
-        let resolvedVideos = await sizes.resolveSizes(for: videoRecords)
+        // Sizes are cached per asset, so only genuinely new or edited items are resolved. On a
+        // library with a lot of video this is the difference between a rescan taking seconds and
+        // taking a minute — each unresolved video needs its own `AVAsset` round trip.
+        let resolvedScreenshots = await withCachedSizes(await screenshotRecords, snapshot: snapshot)
+        let resolvedVideos = await withCachedSizes(await videoRecords, snapshot: snapshot)
 
         guard !Task.isCancelled else {
             phase = .idle
             return
+        }
+
+        for record in resolvedScreenshots + resolvedVideos {
+            if let bytes = record.byteSize { snapshot.sizes[record.id] = bytes }
         }
 
         screenshots = resolvedScreenshots
@@ -152,7 +169,13 @@ final class ScanCoordinator {
             .sorted { ($0.byteSize ?? 0) > ($1.byteSize ?? 0) }
 
         do {
-            let groups = try await scanner.scan(records: all) { [weak self] progress in
+            let outcome = try await scanner.scan(
+                records: all,
+                reusableBuckets: snapshot.bucketGroups
+            ) { [weak self] progress in
+                // On a warm start, `preparing` carries no work worth reporting — only surface the
+                // stages that mean photos are actually being analysed.
+                guard !(isWarmStart && progress.stage == .preparing) else { return }
                 Task { @MainActor [weak self] in
                     self?.phase = .scanning(stage: progress.stage, fraction: progress.fraction)
                 }
@@ -164,9 +187,21 @@ final class ScanCoordinator {
             }
 
             // Groups arrive without sizes; resolve them so "reclaimable" is a real number.
-            similarGroups = await withSizes(groups)
+            similarGroups = await withSizes(outcome.groups, snapshot: snapshot)
             plan.register(groups: similarGroups)
             plan.pruneMissing(liveAssetIDs: Set(all.map(\.id)))
+
+            for group in similarGroups {
+                for asset in group.assets where asset.byteSize != nil {
+                    snapshot.sizes[asset.id] = asset.byteSize
+                }
+            }
+
+            snapshot.assetStamps = currentStamps
+            snapshot.bucketGroups = outcome.bucketGroups
+            // Drop sizes for assets that have gone, so the file doesn't grow without bound.
+            snapshot.sizes = snapshot.sizes.filter { currentStamps[$0.key] != nil }
+            await snapshots.save(snapshot)
 
             await refreshStorage()
             phase = .ready
@@ -177,10 +212,43 @@ final class ScanCoordinator {
         }
     }
 
+    private static func stamps(for records: [AssetRecord]) -> [String: Double] {
+        var stamps: [String: Double] = [:]
+        stamps.reserveCapacity(records.count)
+        for record in records {
+            stamps[record.id] = record.modificationDate?.timeIntervalSince1970 ?? 0
+        }
+        return stamps
+    }
+
+    /// Fills in sizes from the snapshot where they're still valid, resolving only the rest.
+    private func withCachedSizes(
+        _ records: [AssetRecord],
+        snapshot: ScanSnapshot
+    ) async -> [AssetRecord] {
+        var known: [AssetRecord] = []
+        var unknown: [AssetRecord] = []
+
+        for var record in records {
+            if let bytes = snapshot.sizes[record.id] {
+                record.byteSize = bytes
+                known.append(record)
+            } else {
+                unknown.append(record)
+            }
+        }
+
+        guard !unknown.isEmpty else { return known }
+        return known + (await sizes.resolveSizes(for: unknown))
+    }
+
     /// Fills in byte sizes for every asset in every group.
-    private func withSizes(_ groups: [SimilarPhotoGroup]) async -> [SimilarPhotoGroup] {
+    private func withSizes(
+        _ groups: [SimilarPhotoGroup],
+        snapshot: ScanSnapshot
+    ) async -> [SimilarPhotoGroup] {
         let flattened = groups.flatMap(\.assets)
-        let resolved = await sizes.resolveSizes(for: flattened)
+        let resolved = await withCachedSizes(flattened, snapshot: snapshot)
         var byID: [String: AssetRecord] = [:]
         for record in resolved { byID[record.id] = record }
 
