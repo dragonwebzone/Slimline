@@ -87,23 +87,14 @@ struct AssetPreviewCard: View {
 struct AssetPreviewMenu: ViewModifier {
     let record: AssetRecord
     let isSelected: Bool
-    /// `nil` where selecting isn't permitted — the keeper of a group — so the menu offers the
-    /// preview without a control that would be refused.
+    /// `nil` where selecting isn't permitted — the last photo left in a set — so the menu offers
+    /// the preview without a control that would be refused.
     let onToggle: (() -> Void)?
-    /// `nil` for the current keeper and for ungrouped assets, which have nothing to promote.
-    let onMakeKeeper: (() -> Void)?
+
+    @Environment(\.keepForGood) private var keepForGood
 
     func body(content: Content) -> some View {
         content.contextMenu {
-            // Promotion comes first: on a group where the scan picked the wrong frame, this is
-            // the action the user is reaching for, and it has to be reachable before the
-            // destructive one.
-            if let onMakeKeeper {
-                Button(action: onMakeKeeper) {
-                    Label("Keep this one instead", systemImage: "star")
-                }
-            }
-
             if let onToggle {
                 Button(role: isSelected ? nil : .destructive, action: onToggle) {
                     Label(
@@ -111,8 +102,17 @@ struct AssetPreviewMenu: ViewModifier {
                         systemImage: isSelected ? "arrow.uturn.backward" : "trash"
                     )
                 }
-            } else if onMakeKeeper == nil {
-                Label("Kept as the best shot", systemImage: "lock.fill")
+            } else {
+                Label("The last one left in its set", systemImage: "lock.fill")
+            }
+
+            if let keepForGood {
+                Divider()
+                Button {
+                    keepForGood([record.id])
+                } label: {
+                    Label("Keep and don't show again", systemImage: "eye.slash")
+                }
             }
         } preview: {
             AssetPreviewCard(record: record)
@@ -125,16 +125,28 @@ extension View {
     func assetPreview(
         _ record: AssetRecord,
         isSelected: Bool,
-        onToggle: (() -> Void)? = nil,
-        onMakeKeeper: (() -> Void)? = nil
+        onToggle: (() -> Void)? = nil
     ) -> some View {
-        modifier(
-            AssetPreviewMenu(
-                record: record,
-                isSelected: isSelected,
-                onToggle: onToggle,
-                onMakeKeeper: onMakeKeeper
-            )
-        )
+        modifier(AssetPreviewMenu(record: record, isSelected: isSelected, onToggle: onToggle))
     }
+}
+
+/// Keeps photos for good, taking them out of every result.
+///
+/// A struct rather than a bare closure so SwiftUI can compare it. Closures aren't comparable, so a
+/// closure in the environment counts as changed on every update and redraws every photo cell that
+/// reads it. The action always goes to the one coordinator, so any two are interchangeable.
+struct KeepForGoodAction: Equatable {
+    let perform: ([String]) -> Void
+
+    func callAsFunction(_ ids: [String]) {
+        perform(ids)
+    }
+
+    static func == (lhs: Self, rhs: Self) -> Bool { true }
+}
+
+extension EnvironmentValues {
+    /// `nil` where keeping for good isn't offered.
+    @Entry var keepForGood: KeepForGoodAction? = nil
 }

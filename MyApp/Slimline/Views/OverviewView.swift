@@ -8,6 +8,13 @@ struct OverviewView: View {
     /// Tapping a tile selects that tab rather than pushing a copy of the screen, so the tab bar
     /// stays the single source of navigation and the back gesture never gets confusing.
     let onSelect: (RootView.Tab) -> Void
+    /// Lands on a specific segment of the Photos tab, so the Blurry tile opens Blurry.
+    let onSelectPhotos: (SimilarPhotosView.Filter) -> Void
+    let onOpenCalendar: () -> Void
+    let onOpenVault: () -> Void
+    let onOpenKept: () -> Void
+
+    @State private var isSwiping = false
 
     var body: some View {
         ScrollView {
@@ -23,6 +30,12 @@ struct OverviewView: View {
 
                 scanStatus
 
+                swipeCard
+
+                if coordinator.history.cleans > 0 {
+                    historyCard
+                }
+
                 VStack(spacing: 8) {
                     SectionHeading("What's taking up space")
                     categoryTiles
@@ -31,9 +44,61 @@ struct OverviewView: View {
             .padding(Theme.screenInset)
         }
         .pageBackground()
+        .fullScreenCover(isPresented: $isSwiping) {
+            SwipeReviewView(
+                title: "Swipe Through",
+                records: coordinator.swipeCandidates,
+                plan: coordinator.plan
+            )
+        }
         .refreshable {
             await coordinator.refreshStorage()
             coordinator.startScan(force: true)
+        }
+    }
+
+    // MARK: - Swipe
+
+    /// One way into swipe review that covers everything suggested, rather than one per category.
+    ///
+    /// Placed high and styled as the primary thing to do, because for most people it is: going
+    /// through suggestions one photo at a time is quicker than learning five separate screens.
+    @ViewBuilder
+    private var swipeCard: some View {
+        let candidates = coordinator.swipeCandidates
+        if coordinator.phase == .ready, !candidates.isEmpty {
+            let bytes = candidates.compactMap(\.byteSize).reduce(0, +)
+            Button { isSwiping = true } label: {
+                HStack(spacing: 14) {
+                    Image(systemName: "rectangle.stack.fill")
+                        .font(.system(size: 20, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 44, height: 44)
+                        .background(.white.opacity(0.18), in: .rect(cornerRadius: 12))
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Swipe through photos & videos")
+                            .font(.system(size: 16, weight: .semibold))
+                        Text("\(candidates.count) suggestions · \(ByteFormatting.string(bytes))")
+                            .font(.system(size: 13))
+                            .opacity(0.85)
+                            .contentTransition(.numericText())
+                        Text("Left to delete, right to keep")
+                            .font(.system(size: 12))
+                            .opacity(0.7)
+                    }
+                    .foregroundStyle(.white)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(.white.opacity(0.7))
+                }
+                .padding(16)
+                .background(Theme.accent, in: .rect(cornerRadius: Theme.cardCorner))
+                .contentShape(.rect(cornerRadius: Theme.cardCorner))
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Swipe through \(candidates.count) suggested photos and videos")
+            .accessibilityHint("Swipe left to mark for deletion, right to keep for good")
         }
     }
 
@@ -101,6 +166,26 @@ struct OverviewView: View {
         }
     }
 
+    /// A small running tally. Worth the space because it's the one figure that shows the app has
+    /// actually done something over time, rather than only what it could do next.
+    private var historyCard: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "leaf.fill")
+                .foregroundStyle(Theme.accent)
+            VStack(alignment: .leading, spacing: 1) {
+                Text("\(ByteFormatting.string(coordinator.history.bytes)) cleared so far")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(Theme.primaryText)
+                    .contentTransition(.numericText())
+                Text("\(coordinator.history.items) items across \(coordinator.history.cleans) \(coordinator.history.cleans == 1 ? "clean" : "cleans")")
+                    .font(.system(size: 12))
+                    .foregroundStyle(Theme.secondaryText)
+            }
+            Spacer()
+        }
+        .card(padding: 14)
+    }
+
     private var readySummary: String {
         coordinator.totalReclaimableBytes > 0
             ? "\(ByteFormatting.string(coordinator.totalReclaimableBytes)) worth reviewing"
@@ -117,11 +202,12 @@ struct OverviewView: View {
 
     // MARK: - Category summary
 
-    /// A 2×2 grid of the four categories.
+    /// A two-column grid of the categories.
     ///
-    /// Tiles rather than a list because these are four peers the user picks between, not a ranked
+    /// Tiles rather than a list because these are peers the user picks between, not a ranked
     /// sequence to read top to bottom — and because a tile has room for the figure that actually
     /// drives the choice, which is how much each one would free.
+    @ViewBuilder
     private var categoryTiles: some View {
         LazyVGrid(
             columns: Array(repeating: GridItem(.flexible(), spacing: 8), count: 2),
@@ -134,7 +220,7 @@ struct OverviewView: View {
                 detail: coordinator.similarGroups.isEmpty
                     ? scannedDetail(for: coordinator.phase)
                     : "\(coordinator.similarGroups.count) sets"
-            ) { onSelect(.photos) }
+            ) { onSelectPhotos(.similar) }
 
             CategoryTile(
                 title: "Large Videos",
@@ -155,6 +241,13 @@ struct OverviewView: View {
             ) { onSelect(.screenshots) }
 
             CategoryTile(
+                title: "Blurry Photos",
+                systemImage: "camera.aperture",
+                bytes: coordinator.blurryBytes,
+                detail: blurryDetail
+            ) { onSelectPhotos(.blurry) }
+
+            CategoryTile(
                 title: "Duplicate Contacts",
                 systemImage: "person.2",
                 // Contacts take up a negligible, unmeasurable amount of space, so this tile leads
@@ -163,7 +256,91 @@ struct OverviewView: View {
                 countLabel: contactCountLabel,
                 detail: contactsDetail
             ) { onSelect(.contacts) }
+
+            CategoryTile(
+                title: "Old Events",
+                systemImage: "calendar",
+                // Events take up no meaningful space either, so this leads with a count too.
+                bytes: 0,
+                countLabel: coordinator.calendarPhase == .ready && !coordinator.oldEvents.isEmpty
+                    ? "\(coordinator.oldEvents.count)"
+                    : nil,
+                detail: calendarDetail
+            ) { onOpenCalendar() }
         }
+
+        // Set apart from the grid: the vault stores things rather than clearing them, so it
+        // doesn't belong among the categories of what's taking up space.
+        Button(action: onOpenVault) {
+            HStack(spacing: 12) {
+                Image(systemName: "lock.shield.fill")
+                    .font(.system(size: 15, weight: .medium))
+                    .foregroundStyle(Theme.accent)
+                    .frame(width: 30, height: 30)
+                    .background(Theme.surfaceDim, in: .rect(cornerRadius: 9))
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Private Vault")
+                        .font(.system(size: 15, weight: .semibold))
+                        .foregroundStyle(Theme.primaryText)
+                    Text("Keep photos behind \(VaultLock.methodName)")
+                        .font(.system(size: 12))
+                        .foregroundStyle(Theme.secondaryText)
+                }
+                Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(Theme.secondaryText.opacity(0.5))
+            }
+            .card(padding: 14)
+            .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .padding(.top, 8)
+
+        // Only once something has been kept: before that there's nothing to manage, and an empty
+        // row would just be noise.
+        if coordinator.kept.count > 0 {
+            Button(action: onOpenKept) {
+                HStack(spacing: 12) {
+                    Image(systemName: "eye.slash")
+                        .font(.system(size: 14, weight: .medium))
+                        .foregroundStyle(Theme.accent)
+                        .frame(width: 30, height: 30)
+                        .background(Theme.surfaceDim, in: .rect(cornerRadius: 9))
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Kept Photos")
+                            .font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(Theme.primaryText)
+                        Text("\(coordinator.kept.count) no longer suggested")
+                            .font(.system(size: 12))
+                            .foregroundStyle(Theme.secondaryText)
+                            .contentTransition(.numericText())
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Theme.secondaryText.opacity(0.5))
+                }
+                .card(padding: 14)
+                .contentShape(.rect)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private var calendarDetail: String {
+        switch coordinator.calendarPhase {
+        case .idle: "Not checked yet"
+        case .scanning: "Checking…"
+        case .failed: "Couldn't be read"
+        case .ready: coordinator.oldEvents.isEmpty ? "Nothing to clear" : "Older than a year"
+        }
+    }
+
+    private var blurryDetail: String {
+        if coordinator.blurProgress != nil { return "Checking…" }
+        if coordinator.phase != .ready { return "Not scanned yet" }
+        return coordinator.blurryPhotos.isEmpty ? "None found" : "\(coordinator.blurryPhotos.count) photos"
     }
 
     private var contactCountLabel: String? {
@@ -269,7 +446,7 @@ struct CategoryTile: View {
                         .font(.system(size: 15, weight: .medium))
                         .foregroundStyle(Theme.accent)
                         .frame(width: 30, height: 30)
-                        .background(Theme.surfaceDim, in: .rect(cornerRadius: 7))
+                        .background(Theme.surfaceDim, in: .rect(cornerRadius: 9))
                     Spacer()
                     Image(systemName: "chevron.right")
                         .font(.system(size: 11, weight: .semibold))

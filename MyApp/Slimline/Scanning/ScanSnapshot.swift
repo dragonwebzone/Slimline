@@ -30,6 +30,10 @@ nonisolated struct ScanSnapshot: Codable, Sendable {
     /// keeping.
     var sizes: [String: Int64] = [:]
 
+    /// Blur measurements, each carrying the stamp it was taken at. Optional so snapshots written
+    /// before blur detection existed still decode rather than forcing a full rescan.
+    var blur: [String: BlurDetector.Result]?
+
     /// A stable fingerprint for a bucket.
     ///
     /// Must be stable across launches, which rules out `Hasher` — Swift seeds it randomly per

@@ -6,7 +6,20 @@
 	objectVersion = 90;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		CE9BB80D30669D210045FCF7 /* WidgetKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CE9BB80C30669D210045FCF7 /* WidgetKit.framework */; };
+		CE9BB80F30669D210045FCF7 /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = CE9BB80E30669D210045FCF7 /* SwiftUI.framework */; };
+		CE9BB81A30669D210045FCF7 /* SlimlineWidgetExtension.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = CE9BB80A30669D210045FCF7 /* SlimlineWidgetExtension.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
+		CE9BB81830669D210045FCF7 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 000000000000000000000000 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = CE9BB80930669D210045FCF7;
+			remoteInfo = SlimlineWidgetExtension;
+		};
 		CEE3BB8D3065209100328686 /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = 000000000000000000000000 /* Project object */;
@@ -16,12 +29,34 @@
 		};
 /* End PBXContainerItemProxy section */
 
+/* Begin PBXCopyFilesBuildPhase section */
+		CE9BB81F30669D210045FCF7 /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			dstPath = "";
+			dstSubfolder = PlugIns;
+			files = (
+				CE9BB81A30669D210045FCF7 /* SlimlineWidgetExtension.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+		};
+/* End PBXCopyFilesBuildPhase section */
+
 /* Begin PBXFileReference section */
 		000000000000000000000120 /* MyApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = MyApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		CE9BB80A30669D210045FCF7 /* SlimlineWidgetExtension.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = SlimlineWidgetExtension.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		CE9BB80C30669D210045FCF7 /* WidgetKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = WidgetKit.framework; path = /System/Library/Frameworks/WidgetKit.framework; sourceTree = "<absolute>"; };
+		CE9BB80E30669D210045FCF7 /* SwiftUI.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = SwiftUI.framework; path = /System/Library/Frameworks/SwiftUI.framework; sourceTree = "<absolute>"; };
 		CEE3BB893065209100328686 /* SlimlineTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SlimlineTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
+		CE9BB81E30669D210045FCF7 /* Exceptions for "SlimlineWidget" folder in "SlimlineWidgetExtension" target */ = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (
+				Info.plist,
+			);
+			target = CE9BB80930669D210045FCF7 /* SlimlineWidgetExtension */;
+		};
 		CEE3BB4F30651C7800328686 /* Exceptions for "MyApp" folder in "MyApp" target */ = {
 			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
 			membershipExceptions = (
@@ -40,6 +75,14 @@
 			path = MyApp;
 			sourceTree = "<group>";
 		};
+		CE9BB81030669D210045FCF7 /* SlimlineWidget */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (
+				CE9BB81E30669D210045FCF7 /* Exceptions for "SlimlineWidget" folder in "SlimlineWidgetExtension" target */,
+			);
+			path = SlimlineWidget;
+			sourceTree = "<group>";
+		};
 		CEE3BB8A3065209100328686 /* SlimlineTests */ = {
 			isa = PBXFileSystemSynchronizedRootGroup;
 			path = SlimlineTests;
@@ -51,6 +94,13 @@
 		000000000000000130000000 /* Frameworks */ = {
 			isa = PBXFrameworksBuildPhase;
 			files = (
+			);
+		};
+		CE9BB80730669D210045FCF7 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			files = (
+				CE9BB80F30669D210045FCF7 /* SwiftUI.framework in Frameworks */,
+				CE9BB80D30669D210045FCF7 /* WidgetKit.framework in Frameworks */,
 			);
 		};
 		CEE3BB863065209100328686 /* Frameworks */ = {
@@ -66,6 +116,8 @@
 			children = (
 				000000000000000000000010 /* MyApp */,
 				CEE3BB8A3065209100328686 /* SlimlineTests */,
+				CE9BB81030669D210045FCF7 /* SlimlineWidget */,
+				CE9BB80B30669D210045FCF7 /* Frameworks */,
 				000000000000000000000020 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -75,8 +127,18 @@
 			children = (
 				000000000000000000000120 /* MyApp.app */,
 				CEE3BB893065209100328686 /* SlimlineTests.xctest */,
+				CE9BB80A30669D210045FCF7 /* SlimlineWidgetExtension.appex */,
 			);
 			name = Products;
+			sourceTree = "<group>";
+		};
+		CE9BB80B30669D210045FCF7 /* Frameworks */ = {
+			isa = PBXGroup;
+			children = (
+				CE9BB80C30669D210045FCF7 /* WidgetKit.framework */,
+				CE9BB80E30669D210045FCF7 /* SwiftUI.framework */,
+			);
+			name = Frameworks;
 			sourceTree = "<group>";
 		};
 /* End PBXGroup section */
@@ -89,8 +151,12 @@
 				000000000000000120000000 /* Sources */,
 				000000000000000130000000 /* Frameworks */,
 				000000000000000140000000 /* Resources */,
+				CE9BB81F30669D210045FCF7 /* Embed Foundation Extensions */,
 			);
 			buildRules = (
+			);
+			dependencies = (
+				CE9BB81930669D210045FCF7 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				000000000000000000000010 /* MyApp */,
@@ -99,6 +165,24 @@
 			productName = MyApp;
 			productReference = 000000000000000000000120 /* MyApp.app */;
 			productType = "com.apple.product-type.application";
+		};
+		CE9BB80930669D210045FCF7 /* SlimlineWidgetExtension */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = CE9BB81B30669D210045FCF7 /* Build configuration list for PBXNativeTarget "SlimlineWidgetExtension" */;
+			buildPhases = (
+				CE9BB80630669D210045FCF7 /* Sources */,
+				CE9BB80730669D210045FCF7 /* Frameworks */,
+				CE9BB80830669D210045FCF7 /* Resources */,
+			);
+			buildRules = (
+			);
+			fileSystemSynchronizedGroups = (
+				CE9BB81030669D210045FCF7 /* SlimlineWidget */,
+			);
+			name = SlimlineWidgetExtension;
+			productName = SlimlineWidgetExtension;
+			productReference = CE9BB80A30669D210045FCF7 /* SlimlineWidgetExtension.appex */;
+			productType = "com.apple.product-type.app-extension";
 		};
 		CEE3BB883065209100328686 /* SlimlineTests */ = {
 			isa = PBXNativeTarget;
@@ -134,6 +218,9 @@
 					000000000000000100000000 = {
 						CreatedOnToolsVersion = 26.3;
 					};
+					CE9BB80930669D210045FCF7 = {
+						CreatedOnToolsVersion = 27.0;
+					};
 					CEE3BB883065209100328686 = {
 						CreatedOnToolsVersion = 27.0;
 						TestTargetID = 000000000000000100000000;
@@ -156,12 +243,18 @@
 			targets = (
 				000000000000000100000000 /* MyApp */,
 				CEE3BB883065209100328686 /* SlimlineTests */,
+				CE9BB80930669D210045FCF7 /* SlimlineWidgetExtension */,
 			);
 		};
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
 		000000000000000140000000 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			files = (
+			);
+		};
+		CE9BB80830669D210045FCF7 /* Resources */ = {
 			isa = PBXResourcesBuildPhase;
 			files = (
 			);
@@ -179,6 +272,11 @@
 			files = (
 			);
 		};
+		CE9BB80630669D210045FCF7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			files = (
+			);
+		};
 		CEE3BB853065209100328686 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
 			files = (
@@ -187,6 +285,11 @@
 /* End PBXSourcesBuildPhase section */
 
 /* Begin PBXTargetDependency section */
+		CE9BB81930669D210045FCF7 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = CE9BB80930669D210045FCF7 /* SlimlineWidgetExtension */;
+			targetProxy = CE9BB81830669D210045FCF7 /* PBXContainerItemProxy */;
+		};
 		CEE3BB8E3065209100328686 /* PBXTargetDependency */ = {
 			isa = PBXTargetDependency;
 			target = 000000000000000100000000 /* MyApp */;
@@ -330,6 +433,8 @@
 		000000000000000111000000 /* Debug configuration for PBXNativeTarget "MyApp" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Z73BP2M7D9;
@@ -339,7 +444,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MyApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Slimline;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Slimline looks for old calendar events you might want to clear out. It only reads your calendar on this iPhone, and nothing is deleted without your approval.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Slimline compares your contacts on this device to find likely duplicates so you can merge or delete them. Nothing is changed without your approval, and nothing leaves your iPhone.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Slimline uses Face ID to unlock your private vault.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Slimline scans your photo library on this device to find duplicate photos, screenshots and large videos. Nothing is deleted without your approval, and nothing leaves your iPhone.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -373,6 +480,8 @@
 		000000000000000112000000 /* Release configuration for PBXNativeTarget "MyApp" */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = Z73BP2M7D9;
@@ -382,7 +491,9 @@
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = MyApp/Info.plist;
 				INFOPLIST_KEY_CFBundleDisplayName = Slimline;
+				INFOPLIST_KEY_NSCalendarsFullAccessUsageDescription = "Slimline looks for old calendar events you might want to clear out. It only reads your calendar on this iPhone, and nothing is deleted without your approval.";
 				INFOPLIST_KEY_NSContactsUsageDescription = "Slimline compares your contacts on this device to find likely duplicates so you can merge or delete them. Nothing is changed without your approval, and nothing leaves your iPhone.";
+				INFOPLIST_KEY_NSFaceIDUsageDescription = "Slimline uses Face ID to unlock your private vault.";
 				INFOPLIST_KEY_NSPhotoLibraryUsageDescription = "Slimline scans your photo library on this device to find duplicate photos, screenshots and large videos. Nothing is deleted without your approval, and nothing leaves your iPhone.";
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphoneos*]" = YES;
 				"INFOPLIST_KEY_UIApplicationSceneManifest_Generation[sdk=iphonesimulator*]" = YES;
@@ -410,6 +521,88 @@
 				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
 				SWIFT_VERSION = 5.0;
 				TARGETED_DEVICE_FAMILY = 1;
+			};
+			name = Release;
+		};
+		CE9BB81C30669D210045FCF7 /* Debug configuration for PBXNativeTarget "SlimlineWidgetExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z73BP2M7D9;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SlimlineWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Slimline;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rishichipra.slimline.SlimlineWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				XROS_DEPLOYMENT_TARGET = 27.0;
+			};
+			name = Debug;
+		};
+		CE9BB81D30669D210045FCF7 /* Release configuration for PBXNativeTarget "SlimlineWidgetExtension" */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				ASSETCATALOG_COMPILER_WIDGET_BACKGROUND_COLOR_NAME = WidgetBackground;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = Z73BP2M7D9;
+				ENABLE_APP_SANDBOX = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = SlimlineWidget/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = Slimline;
+				INFOPLIST_KEY_NSHumanReadableCopyright = "";
+				IPHONEOS_DEPLOYMENT_TARGET = 18.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				"LD_RUNPATH_SEARCH_PATHS[sdk=macosx*]" = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				MACOSX_DEPLOYMENT_TARGET = 27.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.rishichipra.slimline.SlimlineWidget;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SKIP_INSTALL = YES;
+				STRING_CATALOG_GENERATE_SYMBOLS = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_APPROACHABLE_CONCURRENCY = YES;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_UPCOMING_FEATURE_MEMBER_IMPORT_VISIBILITY = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = 1;
+				XROS_DEPLOYMENT_TARGET = 27.0;
 			};
 			name = Release;
 		};
@@ -481,6 +674,14 @@
 			buildConfigurations = (
 				000000000000000111000000 /* Debug configuration for PBXNativeTarget "MyApp" */,
 				000000000000000112000000 /* Release configuration for PBXNativeTarget "MyApp" */,
+			);
+			defaultConfigurationName = Release;
+		};
+		CE9BB81B30669D210045FCF7 /* Build configuration list for PBXNativeTarget "SlimlineWidgetExtension" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				CE9BB81C30669D210045FCF7 /* Debug configuration for PBXNativeTarget "SlimlineWidgetExtension" */,
+				CE9BB81D30669D210045FCF7 /* Release configuration for PBXNativeTarget "SlimlineWidgetExtension" */,
 			);
 			defaultConfigurationName = Release;
 		};

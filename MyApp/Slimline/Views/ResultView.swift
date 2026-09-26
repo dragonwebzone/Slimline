@@ -7,6 +7,8 @@ import SwiftUI
 /// instead of claiming a win.
 struct ResultView: View {
     let outcome: DeletionService.Outcome
+    /// The running total, already including this clean.
+    let history: CleanupHistory
     let onDone: () -> Void
 
     @State private var hasAppeared = false
@@ -45,6 +47,18 @@ struct ResultView: View {
                 .padding(.top, 24)
             }
 
+            // Only once there's more than this clean to report: "12 MB in total" straight after
+            // "12 MB freed" would just be the same number twice.
+            if history.cleans > 1 {
+                Label(
+                    "\(ByteFormatting.string(history.bytes)) cleared across \(history.cleans) cleans",
+                    systemImage: "chart.line.uptrend.xyaxis"
+                )
+                .font(.system(size: 13, weight: .medium))
+                .foregroundStyle(Theme.accent)
+                .padding(.top, 16)
+            }
+
             if let failure = outcome.failure {
                 Label(failure, systemImage: "info.circle")
                     .font(.system(size: 13))
@@ -78,6 +92,9 @@ struct ResultView: View {
         if outcome.contactsDeleted > 0 {
             removed.append("\(outcome.contactsDeleted) contact\(outcome.contactsDeleted == 1 ? "" : "s")")
         }
+        if outcome.eventsDeleted > 0 {
+            removed.append("\(outcome.eventsDeleted) event\(outcome.eventsDeleted == 1 ? "" : "s")")
+        }
 
         // "Merged" rather than "removed": the details are all still there, just on one card.
         let mergedCount = outcome.contactsMerged
@@ -100,6 +117,7 @@ struct ResultView: View {
             assetsDeleted: 42,
             bytesPendingReclaim: 2_300_000_000
         ),
+        history: CleanupHistory(),
         onDone: {}
     )
 }
@@ -107,6 +125,7 @@ struct ResultView: View {
 #Preview("Contacts only") {
     ResultView(
         outcome: DeletionService.Outcome(contactsDeleted: 2, contactsMerged: 3),
+        history: CleanupHistory(),
         onDone: {}
     )
 }
@@ -117,6 +136,7 @@ struct ResultView: View {
             assetsRequested: 42,
             failure: "Nothing was deleted."
         ),
+        history: CleanupHistory(),
         onDone: {}
     )
 }

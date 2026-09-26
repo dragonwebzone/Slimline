@@ -18,10 +18,12 @@ final class CleanPlan {
     /// Duplicate-contact groups marked to be merged into their primary card.
     private(set) var mergingGroupIDs: Set<String> = []
 
-    /// Assets we refuse to select: the suggested keeper in each similar-photo group.
-    private var protectedAssetIDs: Set<String> = []
+    /// Calendar events marked for deletion. No grouping rules apply: each old event stands alone,
+    /// and there's no "keeper" to protect.
+    private(set) var selectedEventIDs: Set<String> = []
 
-    /// Asset identifier to the group it belongs to, for the "never empty a group" rule.
+    /// Asset identifier to the group it belongs to, so the review screen can say when a whole set
+    /// is about to go.
     private var groupByAsset: [String: String] = [:]
     private var assetsByGroup: [String: Set<String>] = [:]
 
@@ -34,28 +36,24 @@ final class CleanPlan {
 
     // MARK: - Registration
 
-    /// Teaches the plan about similar-photo groups so it can enforce keeper protection.
+    /// Teaches the plan about similar-photo groups.
     ///
     /// Called whenever a scan completes. Re-registering replaces the previous topology but keeps
     /// any still-valid selections.
+    ///
+    /// No photo is locked, and a whole set may be selected — to keep it all from the review bar,
+    /// or because none of it is wanted. Deleted photos go to Recently Deleted for 30 days, and the
+    /// review screen says plainly when an entire set is about to go, so that's never a surprise.
     func register(groups: [SimilarPhotoGroup]) {
-        protectedAssetIDs.removeAll()
         groupByAsset.removeAll()
         assetsByGroup.removeAll()
 
         for group in groups {
-            protectedAssetIDs.insert(group.bestAssetID)
             let ids = Set(group.assets.map(\.id))
             assetsByGroup[group.id] = ids
             for id in ids {
                 groupByAsset[id] = group.id
             }
-        }
-
-        // Drop any selection that is now protected — e.g. a rescan promoted a different photo to
-        // keeper. Silently deleting something we now call "the best shot" would be a real bug.
-        for id in protectedAssetIDs where selectedAssets[id] != nil {
-            selectedAssets.removeValue(forKey: id)
         }
     }
 
@@ -91,22 +89,24 @@ final class CleanPlan {
         selectedAssets[assetID] != nil
     }
 
-    func isProtected(_ assetID: String) -> Bool {
-        protectedAssetIDs.contains(assetID)
+    /// Whether selecting this asset is allowed. Always, now that no photo is locked; kept as the
+    /// single place a future rule would go.
+    func canSelect(_ assetID: String) -> Bool {
+        true
     }
 
-    /// Whether selecting this asset is allowed right now.
-    ///
-    /// Refuses protected keepers, and refuses the selection that would leave a group with nothing
-    /// kept. The second rule is belt-and-braces given keepers are already protected, but it holds
-    /// even if keeper protection is ever relaxed.
-    func canSelect(_ assetID: String) -> Bool {
-        if protectedAssetIDs.contains(assetID) { return false }
-        guard let groupID = groupByAsset[assetID], let members = assetsByGroup[groupID] else {
-            return true
+    /// Similar-photo sets with every photo selected — the review screen warns before these go.
+    var fullySelectedGroupCount: Int {
+        assetsByGroup.values.filter { members in
+            !members.isEmpty && members.allSatisfy { selectedAssets[$0] != nil }
+        }.count
+    }
+
+    /// Selects every photo in a set.
+    func selectAll(in group: SimilarPhotoGroup) {
+        for record in group.assets {
+            select(record)
         }
-        let selectedInGroup = members.filter { selectedAssets[$0] != nil }.count
-        return selectedInGroup + 1 < members.count
     }
 
     var totalBytes: Int64 {
@@ -119,6 +119,13 @@ final class CleanPlan {
 
     var isEmpty: Bool {
         selectedAssets.isEmpty && selectedContactIDs.isEmpty && mergingGroupIDs.isEmpty
+            && selectedEventIDs.isEmpty
+    }
+
+    /// Every item this plan will remove, of every kind — what the review bar and the confirm
+    /// button count. Kept here so the two can't disagree.
+    var totalItemCount: Int {
+        totalAssetCount + totalContactsRemoved + selectedEventIDs.count
     }
 
     var selectedAssetIDs: [String] {
@@ -193,8 +200,12 @@ final class CleanPlan {
         return select(record)
     }
 
-    /// Selects everything in a group except the keeper. Used by "select all extras".
+    /// Selects everything in a group except the suggested best shot. Used by "select extras".
+    ///
+    /// The best shot is deselected too, if the user had picked it: "select extras" means "keep the
+    /// best one", and leaving it selected would have the plan refuse the last extra instead.
     func selectExtras(in group: SimilarPhotoGroup) {
+        deselect(group.bestAssetID)
         for record in group.others {
             select(record)
         }
@@ -251,11 +262,59 @@ final class CleanPlan {
         }
     }
 
+    /// Whether every card except the kept one is queued for outright deletion.
+    func isDeletingOthers(_ group: DuplicateContactGroup) -> Bool {
+        !group.duplicates.isEmpty && group.duplicates.allSatisfy { selectedContactIDs.contains($0.id) }
+    }
+
+    /// Queues every card except the kept one for deletion, or takes them all back.
+    ///
+    /// The alternative to merging, so it replaces a merge on the same group rather than stacking
+    /// with it. The kept card is never included, so the group can't be emptied.
+    func toggleDeleteOthers(_ group: DuplicateContactGroup) {
+        let others = group.duplicates.map(\.id).filter { !protectedContactIDs.contains($0) }
+        if isDeletingOthers(group) {
+            selectedContactIDs.subtract(others)
+        } else {
+            mergingGroupIDs.remove(group.id)
+            selectedContactIDs.formUnion(others)
+        }
+    }
+
     /// Clears everything. Called after a successful clean.
+    // MARK: - Calendar events
+
+    func isEventSelected(_ id: String) -> Bool {
+        selectedEventIDs.contains(id)
+    }
+
+    func toggleEvent(_ id: String) {
+        if selectedEventIDs.contains(id) {
+            selectedEventIDs.remove(id)
+        } else {
+            selectedEventIDs.insert(id)
+        }
+    }
+
+    func selectEvents(_ ids: [String]) {
+        selectedEventIDs.formUnion(ids)
+    }
+
+    func deselectEvents(_ ids: [String]) {
+        selectedEventIDs.subtract(ids)
+    }
+
+    /// Forgets selections for events that are no longer candidates — deleted elsewhere, or edited
+    /// into something the scan no longer offers.
+    func pruneEvents(keeping live: Set<String>) {
+        selectedEventIDs.formIntersection(live)
+    }
+
     func reset() {
         selectedAssets.removeAll()
         selectedContactIDs.removeAll()
         mergingGroupIDs.removeAll()
+        selectedEventIDs.removeAll()
     }
 
     /// Forgets selections for assets that no longer exist.

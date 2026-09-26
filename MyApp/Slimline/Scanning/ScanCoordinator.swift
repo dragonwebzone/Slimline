@@ -26,11 +26,20 @@ final class ScanCoordinator {
 
     private(set) var phase: Phase = .idle
     private(set) var contactPhase: ContactPhase = .idle
+    /// Same shape as contacts: one pass, no meaningful progress fraction.
+    private(set) var calendarPhase: ContactPhase = .idle
 
     private(set) var similarGroups: [SimilarPhotoGroup] = []
     private(set) var screenshots: [AssetRecord] = []
     private(set) var largeVideos: [AssetRecord] = []
     private(set) var duplicateContacts: [DuplicateContactGroup] = []
+    /// Old, one-off events on editable calendars, oldest first.
+    private(set) var oldEvents: [EventRecord] = []
+    /// Photos both blur signals agree on, largest first.
+    private(set) var blurryPhotos: [AssetRecord] = []
+    /// Progress of the blur pass while it's measuring new photos; `nil` when idle or when every
+    /// photo was already measured, so a warm start shows nothing.
+    private(set) var blurProgress: Double?
     private(set) var storage: StorageSnapshot = .unknown
 
     /// Set when sizes for this category are pixel-based estimates rather than measurements, so
@@ -38,6 +47,10 @@ final class ScanCoordinator {
     private(set) var photoSizesAreEstimated = false
 
     let plan = CleanPlan()
+    /// Everything cleared so far, across sessions.
+    let history = CleanupHistory()
+    /// Photos the user has kept for good, which no result ever shows again.
+    let kept = KeptPhotos()
 
     private let index = AssetIndex()
     private let sizes = AssetSizeProvider()
@@ -46,6 +59,10 @@ final class ScanCoordinator {
     private let contactScanner = ContactScanner()
     private let snapshots = ScanSnapshotStore()
     private let keepers = KeeperPreferences()
+    private let blurDetector = BlurDetector()
+    private let calendarScanner = CalendarScanner()
+    private var calendarScanGeneration = 0
+    private var blurTask: Task<Void, Never>?
 
     private var scanTask: Task<Void, Never>?
     private var contactScanTask: Task<Void, Never>?
@@ -81,7 +98,41 @@ final class ScanCoordinator {
     /// Screenshots and videos count in full because the user may remove any of them; similar
     /// photos count only their non-keepers, since one of each group always stays.
     var totalReclaimableBytes: Int64 {
-        similarReclaimableBytes + screenshotBytes + videoBytes
+        // Counted by identity, not by summing categories: a blurry screenshot, or a blurry photo
+        // that's also a similar-shot extra, would otherwise be counted twice and the headline
+        // would promise space that doesn't exist.
+        let keepers = Set(similarGroups.map(\.bestAssetID))
+        var seen: Set<String> = []
+        var total: Int64 = 0
+        let candidates = similarGroups.flatMap(\.others) + screenshots + largeVideos
+            + blurryPhotos.filter { !keepers.contains($0.id) }
+        for record in candidates where seen.insert(record.id).inserted {
+            total += record.byteSize ?? 0
+        }
+        return total
+    }
+
+    /// Everything suggested, for swiping through in one go: similar-set extras, blurry photos,
+    /// screenshots and large videos, largest first, each photo once.
+    ///
+    /// A set's best shot is left out, the same as on the Blurry tab: it's the one the set
+    /// suggests keeping, so offering it for a swipe would contradict that.
+    var swipeCandidates: [AssetRecord] {
+        let bestShots = Set(similarGroups.map(\.bestAssetID))
+        var seen: Set<String> = []
+        let all = similarGroups.flatMap(\.others) + blurryPhotos + screenshots + largeVideos
+        return all
+            .filter { !bestShots.contains($0.id) && seen.insert($0.id).inserted }
+            .sorted { ($0.byteSize ?? 0) > ($1.byteSize ?? 0) }
+    }
+
+    /// What clearing every blurry photo would free, excluding any that are a group's keeper.
+    var blurryBytes: Int64 {
+        let keepers = Set(similarGroups.map(\.bestAssetID))
+        return blurryPhotos
+            .filter { !keepers.contains($0.id) }
+            .compactMap(\.byteSize)
+            .reduce(0, +)
     }
 
     // MARK: - Lifecycle
@@ -196,10 +247,13 @@ final class ScanCoordinator {
 
         // Biggest first, everywhere. The user came to free up space, so the items worth their
         // attention are the ones that would free the most of it — not the most recent.
+        // Kept photos are filtered here as well as after grouping, since these two lists appear
+        // on screen before the similarity scan finishes.
         screenshots = resolvedScreenshots
+            .filter { !kept.contains($0.id) }
             .sorted { ($0.byteSize ?? 0) > ($1.byteSize ?? 0) }
         largeVideos = resolvedVideos
-            .filter { ($0.byteSize ?? 0) > 0 }
+            .filter { ($0.byteSize ?? 0) > 0 && !kept.contains($0.id) }
             .sorted { ($0.byteSize ?? 0) > ($1.byteSize ?? 0) }
 
         do {
@@ -230,6 +284,8 @@ final class ScanCoordinator {
             )
             plan.register(groups: similarGroups)
             plan.pruneMissing(liveAssetIDs: Set(all.map(\.id)))
+            kept.prune(keeping: Set(all.map(\.id)))
+            hideKept()
 
             for group in similarGroups {
                 for asset in group.assets where asset.byteSize != nil {
@@ -245,6 +301,11 @@ final class ScanCoordinator {
 
             await refreshStorage()
             phase = .ready
+
+            // Blur runs after the main results are on screen rather than holding them up. On a
+            // first scan it has the whole library to measure; the user shouldn't wait for that to
+            // see their duplicates.
+            startBlurPass(all)
         } catch is CancellationError {
             phase = .idle
         } catch {
@@ -326,28 +387,182 @@ final class ScanCoordinator {
         return false
     }
 
-    /// Promotes a different photo to be the one kept in its group.
+    // MARK: - Calendar
+
+    /// Same idempotent, generation-guarded shape as the contact scan, for the same reasons: it's
+    /// called on launch and on every visit, and a superseded run must never overwrite a newer one.
+    func startCalendarScan(force: Bool = false) {
+        if !force {
+            switch calendarPhase {
+            case .scanning, .ready: return
+            case .idle, .failed: break
+            }
+        }
+
+        calendarScanGeneration += 1
+        let generation = calendarScanGeneration
+        calendarPhase = .scanning
+
+        Task { [weak self] in
+            guard let self else { return }
+            let events = await calendarScanner.scan()
+            guard generation == calendarScanGeneration else { return }
+            oldEvents = events
+            plan.pruneEvents(keeping: Set(events.map(\.id)))
+            calendarPhase = .ready
+        }
+    }
+
+    /// Drops deleted events from the results without a rescan.
+    func removeEventsFromResults(ids: Set<String>) {
+        guard !ids.isEmpty else { return }
+        oldEvents.removeAll { ids.contains($0.id) }
+    }
+
+    // MARK: - Blur
+
+    private func startBlurPass(_ records: [AssetRecord]) {
+        blurTask?.cancel()
+        // Screenshots are excluded because flat UI is edgeless by design, and videos because a
+        // single frame says nothing about whether the clip is in focus.
+        let candidates = records.filter { !$0.isVideo && !$0.isScreenshot }
+        // Background priority: blur is a nice-to-have that runs while the user is already using
+        // the results, so it should yield to anything they're actually doing.
+        blurTask = Task(priority: .utility) { [weak self] in
+            // Exact duplicates first: they're certain, so they're the most valuable thing the
+            // background can add, and the pass is fast once sizes and prints are cached.
+            await self?.runExactDuplicatePass(records)
+            await self?.runBlurPass(candidates)
+        }
+    }
+
+    // MARK: - Exact duplicates
+
+    /// Finds copies of the same photo that the time buckets can't, and adds them as groups.
     ///
-    /// The scan's pick is a suggestion, not a verdict. It's right often enough to be a good
-    /// default and wrong often enough that refusing to budge would be the app overruling someone
-    /// about their own photos — it can rank sharpness and resolution, but not which face came out
-    /// better. Re-registering the groups moves the protection across, which also drops the new
-    /// keeper from the deletion set if it happened to be selected.
-    func setKeeper(_ assetID: String, inGroup groupID: String) {
-        guard let index = similarGroups.firstIndex(where: { $0.id == groupID }),
-              similarGroups[index].assets.contains(where: { $0.id == assetID })
-        else { return }
+    /// The similarity scan only compares photos taken close together, so a copy saved or
+    /// imported years after its original is invisible to it. This matches on exact byte size and
+    /// dimensions across the whole library, then confirms each match visually.
+    ///
+    /// Skipped where sizes are pixel estimates rather than measurements (before iOS 27): there,
+    /// every photo of the same resolution would share a "size", and the metadata match would mean
+    /// nothing.
+    private func runExactDuplicatePass(_ records: [AssetRecord]) async {
+        guard isExactPhotoSizingAvailable else { return }
 
-        let group = similarGroups[index]
-        similarGroups[index] = SimilarPhotoGroup(
-            id: group.id,
-            assets: Self.ordered(group.assets, keeper: assetID),
-            bestAssetID: assetID,
-            similarity: group.similarity
+        let photos = records.filter { !$0.isVideo }
+        var snapshot = await snapshots.load()
+        // Resolving every photo's size is the slow part on a first run. It's cached per asset,
+        // so later launches only pay for new photos.
+        let sized = await withCachedSizes(photos, snapshot: snapshot)
+        guard !Task.isCancelled else { return }
+
+        snapshot = await snapshots.load()
+        for record in sized {
+            if let bytes = record.byteSize { snapshot.sizes[record.id] = bytes }
+        }
+        await snapshots.save(snapshot)
+
+        // Photos already in a similar group are left out, so no photo is ever in two groups —
+        // which would let the same file be counted, and offered for deletion, twice.
+        let grouped = Set(similarGroups.flatMap { $0.assets.map(\.id) })
+        let candidates = PhotoGrouping.exactDuplicateCandidates(
+            for: sized,
+            excluding: grouped.union(kept.ids)
         )
+        guard !candidates.isEmpty else { return }
 
-        keepers.preferPhoto(assetID, over: group.assets.map(\.id))
+        let found = await scanner.confirmExactDuplicates(candidates)
+        guard !found.isEmpty, !Task.isCancelled else { return }
+
+        let ordered = found.map { group in
+            SimilarPhotoGroup(
+                id: group.id,
+                assets: Self.ordered(group.assets, keeper: group.bestAssetID),
+                bestAssetID: group.bestAssetID,
+                similarity: group.similarity
+            )
+        }
+        similarGroups = KeeperPreferences.applying(keepers.photos, to: similarGroups + ordered)
+            .sorted { $0.reclaimableBytes > $1.reclaimableBytes }
         plan.register(groups: similarGroups)
+    }
+
+    /// Photos measured per batch before results are published and saved.
+    private let blurBatchSize = 250
+
+    /// Measures blur in batches, newest photos first, publishing and saving after each one.
+    ///
+    /// Batched for two reasons, both about how long a first pass over a whole library takes:
+    ///
+    /// - **Results appear as they're found.** Recent photos are measured first — `fetchAll` is
+    ///   newest first — so the ones most worth clearing show up within seconds rather than after
+    ///   the entire library has been read.
+    /// - **Progress survives interruption.** Saving only at the end meant that leaving the app
+    ///   part-way, and iOS suspending it, threw the whole pass away. Each batch is now kept, so
+    ///   the next launch picks up where this one stopped.
+    private func runBlurPass(_ candidates: [AssetRecord]) async {
+        var measured = await snapshots.load().blur ?? [:]
+
+        // Only photos without a valid cached measurement count towards the progress bar, so a
+        // resumed pass shows how much is genuinely left rather than restarting at zero.
+        let pendingTotal = candidates.filter { record in
+            measured[record.id]?.stamp != BlurDetector.stamp(for: record)
+        }.count
+
+        var done = 0
+        var found: [AssetRecord] = []
+
+        for start in stride(from: 0, to: candidates.count, by: blurBatchSize) {
+            guard !Task.isCancelled else { break }
+
+            let batch = Array(candidates[start..<min(start + blurBatchSize, candidates.count)])
+            let doneBefore = done
+            let results = await blurDetector.analyse(batch, cached: measured) { [weak self] progress in
+                guard pendingTotal > 0 else { return }
+                let fraction = Double(doneBefore + progress.completed) / Double(pendingTotal)
+                Task { @MainActor [weak self] in
+                    self?.blurProgress = min(1, fraction)
+                }
+            }
+            let batchPending = batch.filter { measured[$0.id]?.stamp != BlurDetector.stamp(for: $0) }.count
+            done += batchPending
+            measured.merge(results) { _, new in new }
+
+            let blurryInBatch = batch.filter { record in
+                results[record.id].map(BlurDetector.isBlurry) ?? false
+            }
+
+            // Reloaded rather than reused: a photo scan may have saved in the meantime, and
+            // writing back an older copy would silently discard it.
+            var snapshot = await snapshots.load()
+            let sized = await withCachedSizes(blurryInBatch, snapshot: snapshot)
+            found.append(contentsOf: sized)
+            // Filtered at publish rather than up front, so a photo kept mid-pass drops out too.
+            blurryPhotos = found
+                .filter { !kept.contains($0.id) }
+                .sorted { ($0.byteSize ?? 0) > ($1.byteSize ?? 0) }
+
+            // A warm start has nothing new to measure, so it has nothing to write either.
+            guard batchPending > 0 else { continue }
+            snapshot.blur = measured
+            for record in sized {
+                if let bytes = record.byteSize { snapshot.sizes[record.id] = bytes }
+            }
+            await snapshots.save(snapshot)
+        }
+
+        guard !Task.isCancelled else {
+            blurProgress = nil
+            return
+        }
+
+        // Drop measurements for photos that no longer exist, once the pass has seen everything.
+        let live = Set(candidates.map(\.id))
+        var snapshot = await snapshots.load()
+        snapshot.blur = measured.filter { live.contains($0.key) }
+        await snapshots.save(snapshot)
+        blurProgress = nil
     }
 
     /// Promotes a different card to be the one kept in its duplicate-contact group.
@@ -360,14 +575,50 @@ final class ScanCoordinator {
         else { return }
 
         let group = duplicateContacts[index]
-        duplicateContacts[index] = DuplicateContactGroup(
+        let wasDeletingOthers = plan.isDeletingOthers(group)
+        let updated = DuplicateContactGroup(
             id: group.id,
             contacts: group.contacts,
             primaryContactID: contactID
         )
+        duplicateContacts[index] = updated
 
         keepers.preferContact(contactID, over: group.contacts.map(\.id))
         plan.register(contactGroups: duplicateContacts)
+
+        // "Delete the others" is about the set, not particular cards: moving the kept card should
+        // leave the previous keeper queued in its place rather than silently dropping the choice.
+        if wasDeletingOthers, !plan.isDeletingOthers(updated) {
+            plan.toggleDeleteOthers(updated)
+        }
+    }
+
+    /// Keeps photos for good: they leave every result now and on every later scan.
+    ///
+    /// Taking them out of the plan too matters — a photo selected for deletion and then kept would
+    /// otherwise still be deleted, from a screen that no longer shows it.
+    func keepForGood(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        kept.keep(ids)
+        for id in ids { plan.deselect(id) }
+        removeFromResults(assetIDs: Set(ids))
+    }
+
+    /// Lets kept photos be suggested again.
+    ///
+    /// Results only ever hold what's still suggested, so the released photos come back through a
+    /// warm rescan. The snapshot makes that cheap: nothing unchanged is analysed again.
+    func showAgain(_ ids: [String]) {
+        guard !ids.isEmpty else { return }
+        kept.release(ids)
+        startScan()
+    }
+
+    /// Takes every kept photo out of the freshly published results.
+    private func hideKept() {
+        guard !kept.ids.isEmpty else { return }
+        for id in kept.ids where plan.isSelected(id) { plan.deselect(id) }
+        removeFromResults(assetIDs: kept.ids)
     }
 
     /// Drops deleted assets from the results without a full rescan.
@@ -376,26 +627,34 @@ final class ScanCoordinator {
 
         screenshots.removeAll { assetIDs.contains($0.id) }
         largeVideos.removeAll { assetIDs.contains($0.id) }
+        blurryPhotos.removeAll { assetIDs.contains($0.id) }
+        similarGroups = Self.removing(assetIDs, from: similarGroups)
+        plan.register(groups: similarGroups)
+    }
 
-        similarGroups = similarGroups
+    /// The groups with the given photos taken out.
+    ///
+    /// A group left with a single photo is dropped, since one photo isn't a duplicate of anything.
+    /// If the keeper was among those removed, the next photo takes its place, so a group always
+    /// has one protected member. Pure and static so the rule can be tested without a library.
+    static func removing(_ ids: Set<String>, from groups: [SimilarPhotoGroup]) -> [SimilarPhotoGroup] {
+        groups
             .compactMap { group in
-                let remaining = group.assets.filter { !assetIDs.contains($0.id) }
-                // A group needs at least two members to still be a duplicate group.
+                let remaining = group.assets.filter { !ids.contains($0.id) }
                 guard remaining.count > 1 else { return nil }
+                guard remaining.count != group.assets.count else { return group }
                 let keeper = remaining.contains(where: { $0.id == group.bestAssetID })
                     ? group.bestAssetID
                     : remaining[0].id
                 return SimilarPhotoGroup(
                     id: group.id,
-                    assets: Self.ordered(remaining, keeper: keeper),
+                    assets: ordered(remaining, keeper: keeper),
                     bestAssetID: keeper,
                     similarity: group.similarity
                 )
             }
             // Re-sorted, because removing photos changes what each group would still free.
             .sorted { $0.reclaimableBytes > $1.reclaimableBytes }
-
-        plan.register(groups: similarGroups)
     }
 
     /// Drops removed contacts from the results without a full rescan.

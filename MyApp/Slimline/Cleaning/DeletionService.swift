@@ -1,4 +1,5 @@
 import Contacts
+import EventKit
 import os
 import Photos
 
@@ -16,11 +17,14 @@ actor DeletionService {
         /// Contacts absorbed into another card by a merge. Counted separately from deletions
         /// because the user chose a different action, even though the card is gone either way.
         let contactsMerged: Int
+        let eventsDeleted: Int
         /// Bytes that will be reclaimed once Recently Deleted is emptied.
         let bytesPendingReclaim: Int64
         let failure: String?
 
-        var didAnything: Bool { assetsDeleted > 0 || contactsDeleted > 0 || contactsMerged > 0 }
+        var didAnything: Bool {
+            assetsDeleted > 0 || contactsDeleted > 0 || contactsMerged > 0 || eventsDeleted > 0
+        }
 
         /// Defaulted so each call site states only the fields it actually affects — a clean that
         /// touches no contacts shouldn't have to mention them.
@@ -29,6 +33,7 @@ actor DeletionService {
             assetsDeleted: Int = 0,
             contactsDeleted: Int = 0,
             contactsMerged: Int = 0,
+            eventsDeleted: Int = 0,
             bytesPendingReclaim: Int64 = 0,
             failure: String? = nil
         ) {
@@ -36,6 +41,7 @@ actor DeletionService {
             self.assetsDeleted = assetsDeleted
             self.contactsDeleted = contactsDeleted
             self.contactsMerged = contactsMerged
+            self.eventsDeleted = eventsDeleted
             self.bytesPendingReclaim = bytesPendingReclaim
             self.failure = failure
         }
@@ -47,6 +53,7 @@ actor DeletionService {
                 assetsDeleted: assetsDeleted + other.assetsDeleted,
                 contactsDeleted: contactsDeleted + other.contactsDeleted,
                 contactsMerged: contactsMerged + other.contactsMerged,
+                eventsDeleted: eventsDeleted + other.eventsDeleted,
                 bytesPendingReclaim: bytesPendingReclaim + other.bytesPendingReclaim,
                 // Keep the first failure: it's the one closest to what the user just approved,
                 // and a later stage failing too doesn't make the message more useful.
@@ -216,6 +223,47 @@ actor DeletionService {
             contact.emailAddresses.append(
                 CNLabeledValue(label: CNLabelOther, value: email as NSString)
             )
+        }
+    }
+
+    /// Deletes calendar events.
+    ///
+    /// Permanent and synced: there's no Recently Deleted for events, and removing one removes it
+    /// from every device on the account. Only ever the single occurrence (`.thisEvent`) — the scan
+    /// never offers recurring events, and this makes sure a series can't be taken out by accident
+    /// even if one slipped through.
+    func deleteEvents(ids: [String]) async -> Outcome {
+        guard !ids.isEmpty else { return Outcome() }
+
+        let store = EKEventStore()
+        var queued = 0
+
+        for id in ids {
+            // Re-fetched by identifier, like every other deletion: a stale record finds nothing
+            // rather than the wrong thing.
+            guard let event = store.event(withIdentifier: id),
+                  event.calendar.allowsContentModifications,
+                  !event.hasRecurrenceRules
+            else { continue }
+
+            do {
+                try store.remove(event, span: .thisEvent, commit: false)
+                queued += 1
+            } catch {
+                continue
+            }
+        }
+
+        guard queued > 0 else {
+            return Outcome(failure: "Those events are no longer in your calendar.")
+        }
+
+        do {
+            try store.commit()
+            return Outcome(eventsDeleted: queued)
+        } catch {
+            store.reset()
+            return Outcome(failure: "Calendar events couldn't be deleted.")
         }
     }
 

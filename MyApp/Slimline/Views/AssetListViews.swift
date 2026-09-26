@@ -9,6 +9,7 @@ struct ScreenshotsView: View {
     let plan: CleanPlan
 
     private let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
+    @State private var isSwiping = false
 
     var body: some View {
         ScrollView {
@@ -29,6 +30,9 @@ struct ScreenshotsView: View {
             .padding(Theme.screenInset)
         }
         .pageBackground()
+        .fullScreenCover(isPresented: $isSwiping) {
+            SwipeReviewView(title: "Screenshots", records: records, plan: plan)
+        }
         .overlay {
             if records.isEmpty {
                 ContentUnavailableView(
@@ -67,26 +71,30 @@ struct ScreenshotsView: View {
             .font(.system(size: 12))
             .foregroundStyle(sizesAreEstimated ? Theme.warning : Theme.secondaryText)
 
-            Button {
-                if allSelected {
-                    plan.deselectAll(records)
-                } else {
-                    plan.selectAll(records)
-                }
-            } label: {
-                Text(allSelected ? "Deselect all" : "Select all \(records.count)")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(Theme.accent)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(Theme.background, in: .rect(cornerRadius: Theme.controlCorner))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: Theme.controlCorner)
-                            .strokeBorder(Theme.divider, lineWidth: 1)
+            HStack(spacing: 8) {
+                SwipeLaunchButton(count: records.count) { isSwiping = true }
+
+                Button {
+                    if allSelected {
+                        plan.deselectAll(records)
+                    } else {
+                        plan.selectAll(records)
                     }
+                } label: {
+                    Text(allSelected ? "Deselect all" : "Select all")
+                        .font(.system(size: 13, weight: .semibold))
+                        .foregroundStyle(Theme.accent)
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 8)
+                        .background(Theme.background, in: .rect(cornerRadius: Theme.controlCorner))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: Theme.controlCorner)
+                                .strokeBorder(Theme.divider, lineWidth: 1)
+                        }
+                }
+                .buttonStyle(.plain)
+                .disabled(records.isEmpty)
             }
-            .buttonStyle(.plain)
-            .disabled(records.isEmpty)
         }
         .card()
     }
@@ -130,7 +138,7 @@ struct GridPhotoCell: View {
                             .foregroundStyle(Theme.primaryText)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 2)
-                            .background(Theme.surface.opacity(0.92), in: .rect(cornerRadius: 4))
+                            .background(Theme.surface.opacity(0.92), in: .capsule)
                             .padding(6)
                     }
                 }
@@ -184,8 +192,11 @@ struct GridPhotoCell: View {
 struct LargeVideosView: View {
     let records: [AssetRecord]
     let plan: CleanPlan
+    /// Called after a compressed copy is saved, so the new video shows up.
+    var onCompressed: () -> Void = {}
 
     private let columns = [GridItem(.adaptive(minimum: 100), spacing: 8)]
+    @State private var isSwiping = false
 
     /// A grid, the way Photos shows videos, still ordered largest first.
     ///
@@ -200,13 +211,16 @@ struct LargeVideosView: View {
 
                 LazyVGrid(columns: columns, spacing: 8) {
                     ForEach(records) { record in
-                        VideoGridCell(record: record, plan: plan)
+                        VideoGridCell(record: record, plan: plan, onCompressed: onCompressed)
                     }
                 }
             }
             .padding(Theme.screenInset)
         }
         .pageBackground()
+        .fullScreenCover(isPresented: $isSwiping) {
+            SwipeReviewView(title: "Large Videos", records: records, plan: plan)
+        }
         .overlay {
             if records.isEmpty {
                 ContentUnavailableView(
@@ -240,6 +254,8 @@ struct LargeVideosView: View {
             Text("Largest first. Tap to watch, or tap the circle to select.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondaryText)
+
+            SwipeLaunchButton(count: records.count) { isSwiping = true }
         }
         .card()
     }
@@ -296,12 +312,13 @@ private func previewVideos(count: Int) -> [AssetRecord] {
 private struct VideoGridCell: View {
     let record: AssetRecord
     let plan: CleanPlan
+    let onCompressed: () -> Void
 
     private var isSelected: Bool { plan.isSelected(record.id) }
 
     var body: some View {
         NavigationLink {
-            VideoPreviewView(record: record, plan: plan)
+            VideoPreviewView(record: record, plan: plan, onCompressed: onCompressed)
         } label: {
             AssetThumbnail.Filling(assetID: record.id, ratio: 1, targetPixels: 240)
                 // A scrim under the badges, as Photos has. White-on-anything is only legible if
@@ -328,7 +345,7 @@ private struct VideoGridCell: View {
                 }
         }
         .buttonStyle(.plain)
-        .assetPreview(record, isSelected: isSelected) { plan.toggle(record) }
+        .assetPreview(record, isSelected: isSelected, onToggle: { plan.toggle(record) })
         .accessibilityLabel(accessibilityLabel)
     }
 
@@ -399,6 +416,9 @@ private struct VideoGridCell: View {
 struct VideoPreviewView: View {
     let record: AssetRecord
     let plan: CleanPlan
+    var onCompressed: () -> Void = {}
+
+    @State private var isCompressing = false
 
     @State private var player: AVPlayer?
     @State private var failed = false
@@ -426,6 +446,9 @@ struct VideoPreviewView: View {
         .toolbarColorScheme(.dark, for: .navigationBar)
         .toolbarBackground(.black.opacity(0.6), for: .navigationBar)
         .safeAreaInset(edge: .bottom) { actionBar }
+        .sheet(isPresented: $isCompressing) {
+            CompressVideoSheet(record: record, plan: plan, onSaved: onCompressed)
+        }
         .task {
             guard let made = await Self.makePlayer(assetID: record.id) else {
                 failed = true
@@ -462,6 +485,21 @@ struct VideoPreviewView: View {
 
             Spacer()
 
+            // Keeping the video but at a smaller size is often what someone actually wants from a
+            // long clip — so it's offered right beside deleting it outright.
+            Button {
+                player?.pause()
+                isCompressing = true
+            } label: {
+                Label("Compress", systemImage: "arrow.down.right.and.arrow.up.left")
+                    .font(.system(size: 14, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 9)
+                    .background(.white.opacity(0.2), in: .capsule)
+            }
+            .buttonStyle(.plain)
+
             let isSelected = plan.isSelected(record.id)
             Button {
                 plan.toggle(record)
@@ -490,7 +528,8 @@ struct VideoPreviewView: View {
         Duration.seconds(duration).formatted(.time(pattern: .minuteSecond))
     }
 
-    private static func makePlayer(assetID: String) async -> AVPlayer? {
+    /// Loads a player for a library video, on-device only. Shared with swipe review.
+    static func makePlayer(assetID: String) async -> AVPlayer? {
         guard let asset = PHAsset.fetchAssets(
             withLocalIdentifiers: [assetID],
             options: nil

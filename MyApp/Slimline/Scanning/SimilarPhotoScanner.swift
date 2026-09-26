@@ -158,6 +158,62 @@ actor SimilarPhotoScanner {
         )
     }
 
+    /// Feature-print distance below which two photos are the same image.
+    ///
+    /// Far tighter than `matchThreshold`, because the question here isn't "the same moment" but
+    /// "the same file": a true copy scores essentially zero. This is the check that stops two
+    /// unrelated photos that happen to share a byte count from being offered as duplicates.
+    private let identicalThreshold: Double = 0.02
+
+    /// Confirms size-and-dimension matches by looking at them, returning only real copies.
+    ///
+    /// Candidates come from `PhotoGrouping.exactDuplicateCandidates`, which matches on metadata
+    /// alone. Each pair is compared visually before it's believed; a coincidental byte-count match
+    /// between two different photos fails here and is never shown.
+    func confirmExactDuplicates(_ candidates: [[AssetRecord]]) async -> [SimilarPhotoGroup] {
+        guard !candidates.isEmpty else { return [] }
+        await cache.load()
+
+        var confirmed: [SimilarPhotoGroup] = []
+
+        for bucket in candidates {
+            if Task.isCancelled { break }
+
+            var analyses: [String: Analysis] = [:]
+            for record in bucket {
+                if let analysis = await analyse(record) { analyses[record.id] = analysis }
+            }
+
+            var pairs: [(Int, Int)] = []
+            for i in bucket.indices {
+                for j in (i + 1)..<bucket.count {
+                    guard let left = analyses[bucket[i].id],
+                          let right = analyses[bucket[j].id],
+                          let distance = try? left.featurePrint.distance(to: right.featurePrint),
+                          distance <= identicalThreshold
+                    else { continue }
+                    pairs.append((i, j))
+                }
+            }
+
+            let scores = analyses.compactMapValues(\.aestheticScore)
+            let groups = PhotoGrouping.assembleGroups(
+                bucket: bucket,
+                matchedPairs: pairs,
+                aestheticScores: scores
+            )
+            .map { group in
+                var scored = group
+                scored.similarity = similarity(within: group, analyses: analyses)
+                return scored
+            }
+            confirmed.append(contentsOf: groups)
+        }
+
+        await cache.persist()
+        return confirmed
+    }
+
     /// Turns a stored group back into a live one, dropping members that no longer exist.
     ///
     /// Returns `nil` if fewer than two survive — one photo is not a duplicate group — or if the
@@ -193,6 +249,7 @@ actor SimilarPhotoScanner {
         results.reserveCapacity(total)
         var completed = 0
         var next = 0
+        var lastReportedPercent = -1
 
         try await withThrowingTaskGroup(of: Analysis?.self) { group in
             // Prime the group up to the concurrency limit, then top it up as results land. This
@@ -210,7 +267,14 @@ actor SimilarPhotoScanner {
                     results[analysis.assetID] = analysis
                 }
                 completed += 1
-                onProgress(Progress(stage: .analysing, completed: completed, total: total))
+                // Reported only when the whole-percent figure moves. Every report hops to the main
+                // actor and redraws whatever reads the phase, so reporting per photo turned a
+                // 20,000-photo scan into 20,000 redraws competing with the user's scrolling.
+                let percent = total > 0 ? completed * 100 / total : 100
+                if percent != lastReportedPercent || completed == total {
+                    lastReportedPercent = percent
+                    onProgress(Progress(stage: .analysing, completed: completed, total: total))
+                }
 
                 if next < records.count {
                     let record = records[next]
@@ -386,7 +450,11 @@ actor SimilarPhotoScanner {
                 )
             }
 
-            onProgress(Progress(stage: .grouping, completed: index + 1, total: buckets.count))
+            // Same throttle as analysis: a library produces thousands of buckets.
+            let done = index + 1
+            if done * 100 / buckets.count != (done - 1) * 100 / buckets.count || done == buckets.count {
+                onProgress(Progress(stage: .grouping, completed: done, total: buckets.count))
+            }
         }
 
         // Biggest win first: the user cares about reclaimable space, not chronology.

@@ -14,7 +14,7 @@ struct AssetThumbnail: View {
     /// Pixel budget when filling. Ignored when `side` is set.
     var targetPixels: CGFloat = 220
     /// Zero when the parent already clips, so the corner isn't rounded twice.
-    var cornerRadius: CGFloat = 8
+    var cornerRadius: CGFloat = Theme.innerCorner
     /// Crop to fill the frame, or show the whole image. Grids fill; a preview fits, because the
     /// point of a preview is seeing what's actually in the photo, including its edges.
     var fills: Bool = true

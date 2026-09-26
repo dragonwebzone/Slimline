@@ -8,9 +8,14 @@ import SwiftUI
 struct RootView: View {
     @State private var photoAccess = PhotoLibraryAccess()
     @State private var contactsAccess = ContactsAccess()
+    @State private var calendarAccess = CalendarAccessController()
+    @State private var showCalendar = false
+    @State private var showVault = false
+    @State private var showKept = false
     @State private var coordinator = ScanCoordinator()
     @State private var lastOutcome: DeletionService.Outcome?
     @State private var selectedTab = Tab.overview
+    @State private var photosFilter = SimilarPhotosView.Filter.similar
 
     /// The user can revoke or widen access in Settings while we're backgrounded, so status is
     /// re-read on every activation rather than trusted from launch.
@@ -42,15 +47,20 @@ struct RootView: View {
             await coordinator.refreshStorage()
             if photoAccess.access.canScan { coordinator.startScan() }
             scanContactsIfAlreadyPermitted()
+            if calendarAccess.access.canScan { coordinator.startCalendarScan() }
         }
         .onChange(of: scenePhase) { _, phase in
             guard phase == .active else { return }
             photoAccess.refresh()
             contactsAccess.refresh()
+            calendarAccess.refresh()
             Task { await coordinator.refreshStorage() }
         }
         .onChange(of: contactsAccess.access) { _, _ in
             scanContactsIfAlreadyPermitted()
+        }
+        .onChange(of: calendarAccess.access) { _, access in
+            if access.canScan { coordinator.startCalendarScan() }
         }
         .onChange(of: photoAccess.access) { _, access in
             // Access is usually granted after the first launch, so the initial `.task` runs too
@@ -59,7 +69,7 @@ struct RootView: View {
             coordinator.startScan()
         }
         .sheet(item: $lastOutcome) { outcome in
-            ResultView(outcome: outcome) { lastOutcome = nil }
+            ResultView(outcome: outcome, history: coordinator.history) { lastOutcome = nil }
         }
     }
 
@@ -70,9 +80,46 @@ struct RootView: View {
                     coordinator: coordinator,
                     photoAccess: photoAccess,
                     contactPhase: coordinator.contactPhase,
-                    onSelect: { selectedTab = $0 }
+                    onSelect: { selectedTab = $0 },
+                    onSelectPhotos: { filter in
+                        photosFilter = filter
+                        selectedTab = .photos
+                    },
+                    onOpenCalendar: { showCalendar = true },
+                    onOpenVault: { showVault = true },
+                    onOpenKept: { showKept = true }
                 )
                 .navigationTitle("Slimline")
+                // Pushed rather than tabbed: iOS folds a sixth tab into "More", and calendar
+                // tidying is occasional enough that it doesn't earn a permanent place.
+                .navigationDestination(isPresented: $showCalendar) {
+                    CalendarCleanupView(
+                        events: coordinator.oldEvents,
+                        phase: coordinator.calendarPhase,
+                        access: calendarAccess.access,
+                        plan: coordinator.plan,
+                        onRequestAccess: { await calendarAccess.request() },
+                        onOpenSettings: { calendarAccess.openSettings() },
+                        onScan: { coordinator.startCalendarScan() }
+                    )
+                    .reviewBar(
+                        plan: coordinator.plan,
+                        sizesAreEstimated: coordinator.photoSizesAreEstimated
+                    ) { await performClean() }
+                }
+                .navigationDestination(isPresented: $showVault) {
+                    VaultView { removed in
+                        for id in removed { coordinator.plan.deselect(id) }
+                        coordinator.removeFromResults(assetIDs: removed)
+                    }
+                        .reviewBar(
+                            plan: coordinator.plan,
+                            sizesAreEstimated: coordinator.photoSizesAreEstimated
+                        ) { await performClean() }
+                }
+                .navigationDestination(isPresented: $showKept) {
+                    KeptPhotosView(kept: coordinator.kept) { coordinator.showAgain($0) }
+                }
             }
 
             tab(.photos, "Photos", "photo.on.rectangle.angled") {
@@ -80,15 +127,19 @@ struct RootView: View {
                     groups: coordinator.similarGroups,
                     sizesAreEstimated: coordinator.photoSizesAreEstimated,
                     plan: coordinator.plan,
-                    onMakeKeeper: { assetID, groupID in
-                        coordinator.setKeeper(assetID, inGroup: groupID)
-                    }
+                    blurryPhotos: coordinator.blurryPhotos,
+                    blurProgress: coordinator.blurProgress,
+                    filter: $photosFilter
                 )
                 .navigationTitle("Similar Photos")
             }
 
             tab(.videos, "Videos", "play.rectangle") {
-                LargeVideosView(records: coordinator.largeVideos, plan: coordinator.plan)
+                LargeVideosView(
+                    records: coordinator.largeVideos,
+                    plan: coordinator.plan,
+                    onCompressed: { coordinator.startScan() }
+                )
                     .navigationTitle("Large Videos")
             }
 
@@ -121,6 +172,9 @@ struct RootView: View {
                 .navigationTitle("Duplicate Contacts")
             }
         }
+        // Available to every screen that shows photos — long-press menus, swipe review, group
+        // cards — without threading a callback through each one.
+        .environment(\.keepForGood, KeepForGoodAction { coordinator.keepForGood($0) })
     }
 
     /// One tab, wrapped in its own navigation stack and carrying the review bar.
@@ -172,10 +226,12 @@ struct RootView: View {
         let bytes = plan.totalBytes
         let mergeGroups = plan.mergingGroups
         let contactIDs = Array(plan.selectedContactIDs)
+        let eventIDs = Array(plan.selectedEventIDs)
 
         var outcome = await deletionService.deleteAssets(ids: assetIDs, expectedBytes: bytes)
         outcome = outcome.combined(with: await deletionService.mergeContacts(groups: mergeGroups))
         outcome = outcome.combined(with: await deletionService.deleteContacts(ids: contactIDs))
+        outcome = outcome.combined(with: await deletionService.deleteEvents(ids: eventIDs))
 
         if outcome.assetsDeleted > 0 {
             coordinator.removeFromResults(assetIDs: Set(assetIDs))
@@ -187,11 +243,16 @@ struct RootView: View {
             coordinator.removeContactsFromResults(ids: Set(contactIDs).union(absorbed))
         }
 
+        if outcome.eventsDeleted > 0 {
+            coordinator.removeEventsFromResults(ids: Set(eventIDs))
+        }
+
         if outcome.didAnything {
             plan.reset()
             await coordinator.refreshStorage()
         }
 
+        coordinator.history.record(outcome)
         lastOutcome = outcome
     }
 }

@@ -14,12 +14,17 @@ struct ReviewBar: ViewModifier {
     let sizesAreEstimated: Bool
     let onConfirm: () async -> Void
 
+    @Environment(\.keepForGood) private var keepForGood
+
     func body(content: Content) -> some View {
         content.safeAreaInset(edge: .bottom) {
             if !plan.isEmpty {
                 VStack(spacing: 8) {
                     summary
-                    link
+                    HStack(spacing: 8) {
+                        keepButton
+                        link
+                    }
                 }
                 .padding(.horizontal, Theme.screenInset)
                 .padding(.top, 10)
@@ -37,18 +42,43 @@ struct ReviewBar: ViewModifier {
 
     /// The count on one side, the safety guarantee on the other.
     ///
-    /// Restating that keepers are protected at the moment of commitment is worth the line: it's
-    /// the single thing a user is most likely to be nervous about, and it's true by construction
-    /// in `CleanPlan` rather than a claim the UI is making on its own.
+    /// Restating that photos can be recovered at the moment of commitment is worth the line: it's
+    /// the single thing a user is most likely to be nervous about.
     private var summary: some View {
         HStack(spacing: 6) {
             Text(summaryText)
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondaryText)
             Spacer()
-            Label("Best shots protected", systemImage: "lock.fill")
+            Label("Recoverable for 30 days", systemImage: "arrow.uturn.backward.circle")
                 .font(.system(size: 12, weight: .medium))
                 .foregroundStyle(Theme.accent)
+        }
+    }
+
+    /// The other thing to do with a selection: keep it, for good.
+    ///
+    /// Selecting is how several photos are picked at once, so the choice of what happens to them
+    /// belongs here rather than in a separate multi-select mode. Keeping needs no review screen —
+    /// nothing is deleted, and anything kept can be brought back from Kept Photos.
+    @ViewBuilder
+    private var keepButton: some View {
+        if let keepForGood, plan.totalAssetCount > 0 {
+            Button {
+                withAnimation(.snappy) { keepForGood(plan.selectedAssetIDs) }
+            } label: {
+                Label("Keep \(plan.totalAssetCount)", systemImage: "eye.slash")
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(Theme.accent)
+                    .padding(.horizontal, 18)
+                    .frame(height: 50)
+                    .background(Theme.accent.opacity(0.12), in: .capsule)
+                    .overlay { Capsule().strokeBorder(Theme.accent.opacity(0.35), lineWidth: 1) }
+                    .contentShape(.capsule)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Keep \(plan.totalAssetCount) selected and don't show them again")
+            .transition(.opacity)
         }
     }
 
@@ -68,8 +98,8 @@ struct ReviewBar: ViewModifier {
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 44)
-            .background(Theme.accent, in: .rect(cornerRadius: Theme.controlCorner))
+            .frame(height: 50)
+            .background(Theme.accent, in: .capsule)
         }
         .buttonStyle(.plain)
     }
@@ -82,7 +112,7 @@ struct ReviewBar: ViewModifier {
     }
 
     private var itemCount: Int {
-        plan.totalAssetCount + plan.totalContactsRemoved
+        plan.totalItemCount
     }
 
     private var itemsPhrase: String {

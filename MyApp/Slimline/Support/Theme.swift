@@ -32,9 +32,12 @@ enum Theme {
 
     // MARK: - Metrics
 
-    static let cardCorner: CGFloat = 10
-    static let controlCorner: CGFloat = 8
-    static let innerCorner: CGFloat = 8
+    // Close to Apple's own: grouped-list cards sit near 20pt, controls and tiles near 12pt. The
+    // shapes are continuous ("squircle") corners, SwiftUI's default, which is what makes them
+    // read as Apple's rather than as plain rounded rectangles.
+    static let cardCorner: CGFloat = 20
+    static let controlCorner: CGFloat = 12
+    static let innerCorner: CGFloat = 12
 
     static let screenInset: CGFloat = 16
     static let sectionSpacing: CGFloat = 16
@@ -69,7 +72,7 @@ extension UIColor {
 
 // MARK: - Components
 
-/// The standard card: flat surface, hairline border, 10pt corners.
+/// The standard card: flat surface, hairline border, soft continuous corners.
 struct CardBackground: ViewModifier {
     var padding: CGFloat = 16
 
@@ -124,9 +127,9 @@ struct Chip: View {
             .foregroundStyle(tint)
             .padding(.horizontal, 8)
             .padding(.vertical, 4)
-            .background(Theme.background, in: .rect(cornerRadius: 6))
+            .background(Theme.background, in: .capsule)
             .overlay {
-                RoundedRectangle(cornerRadius: 6)
+                Capsule()
                     .strokeBorder(Theme.divider, lineWidth: 1)
             }
     }
@@ -154,11 +157,13 @@ struct PrimaryActionButton: View {
             }
             .foregroundStyle(.white)
             .frame(maxWidth: .infinity)
-            .frame(height: 44)
+            .frame(height: 50)
+            // A capsule, like the prominent buttons across iOS 26.
             .background(
                 role == .destructive ? Theme.destructive : Theme.accent,
-                in: .rect(cornerRadius: Theme.controlCorner)
+                in: .capsule
             )
+            .contentShape(.capsule)
         }
         .buttonStyle(.plain)
     }

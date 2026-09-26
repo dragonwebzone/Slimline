@@ -155,28 +155,39 @@ nonisolated enum PhotoGrouping {
             .filter { $0.count > 1 }
     }
 
-    /// Byte-identical copies, found without any image analysis at all.
+    /// Candidate copies of the same file anywhere in the library, however far apart in time.
     ///
-    /// Same size, same dimensions and same capture time is a strong enough signal to treat as a
-    /// duplicate. Unlike similar-shot detection this is deliberately global rather than
-    /// time-bucketed, because a re-saved or re-downloaded copy can sit years away from its twin.
-    /// Only runs on records whose size is known.
-    static func exactDuplicateGroups(for records: [AssetRecord]) -> [[AssetRecord]] {
+    /// Matched on exact byte size and pixel dimensions only — deliberately *not* on capture time.
+    /// An earlier version included the capture date in the fingerprint, which made it useless:
+    /// photos with identical capture times already share a time bucket, so the similarity scan
+    /// finds them anyway. The copies the time buckets miss are precisely the ones whose dates
+    /// differ — a photo re-imported, re-saved from a message, or restored from an old backup.
+    ///
+    /// These are *candidates*, not verdicts. Two different photos can share a byte count and
+    /// dimensions by coincidence, so callers must confirm each pair visually before treating it
+    /// as a duplicate. Only meaningful with exact sizes: with pixel-count estimates, every photo
+    /// of the same resolution would "match".
+    ///
+    /// Videos are left out (a copy of a video is a job for the videos screen), as is anything in
+    /// `excluded` — typically photos already grouped by the similarity scan, so no photo ends up
+    /// in two groups at once.
+    static func exactDuplicateCandidates(
+        for records: [AssetRecord],
+        excluding excluded: Set<String> = []
+    ) -> [[AssetRecord]] {
         struct Fingerprint: Hashable {
             let bytes: Int64
             let width: Int
             let height: Int
-            let capturedAt: Date?
         }
 
-        let sized = records.filter { $0.byteSize != nil && ($0.byteSize ?? 0) > 0 }
-        let buckets = Dictionary(grouping: sized) {
-            Fingerprint(
-                bytes: $0.byteSize ?? 0,
-                width: $0.pixelWidth,
-                height: $0.pixelHeight,
-                capturedAt: $0.creationDate
-            )
+        let eligible = records.filter { record in
+            !record.isVideo
+                && !excluded.contains(record.id)
+                && (record.byteSize ?? 0) > 0
+        }
+        let buckets = Dictionary(grouping: eligible) {
+            Fingerprint(bytes: $0.byteSize ?? 0, width: $0.pixelWidth, height: $0.pixelHeight)
         }
         return buckets.values.filter { $0.count > 1 }.map { $0 }
     }

@@ -139,64 +139,89 @@ struct PhotoGroupingTests {
 
     // MARK: - Exact duplicates
 
-    @Test("Byte-identical copies group regardless of how far apart they were taken")
-    func exactDuplicatesAreGlobal() {
-        let captured = Date(timeIntervalSince1970: 0)
-        let records = [
-            AssetRecord(
-                id: "original",
-                creationDate: captured,
-                modificationDate: nil,
-                pixelWidth: 4000,
-                pixelHeight: 3000,
-                isVideo: false,
-                isScreenshot: false,
-                isScreenRecording: false,
-                duration: 0,
-                isFavorite: false,
-                hasAdjustments: false,
-                byteSize: 2_048
-            ),
-            AssetRecord(
-                id: "redownloaded",
-                creationDate: captured,
-                modificationDate: nil,
-                pixelWidth: 4000,
-                pixelHeight: 3000,
-                isVideo: false,
-                isScreenshot: false,
-                isScreenRecording: false,
-                duration: 0,
-                isFavorite: false,
-                hasAdjustments: false,
-                byteSize: 2_048
-            ),
-        ]
-
-        let groups = PhotoGrouping.exactDuplicateGroups(for: records)
-
-        #expect(groups.count == 1)
-        #expect(groups[0].count == 2)
+    /// A photo with an explicit capture date, for the cases where time is the point.
+    private func copy(
+        id: String,
+        takenAt seconds: TimeInterval,
+        width: Int = 4000,
+        height: Int = 3000,
+        bytes: Int64? = 2_048,
+        isVideo: Bool = false
+    ) -> AssetRecord {
+        AssetRecord(
+            id: id,
+            creationDate: Date(timeIntervalSince1970: seconds),
+            modificationDate: nil,
+            pixelWidth: width,
+            pixelHeight: height,
+            isVideo: isVideo,
+            isScreenshot: false,
+            isScreenRecording: false,
+            duration: 0,
+            isFavorite: false,
+            hasAdjustments: false,
+            byteSize: bytes
+        )
     }
 
-    @Test("Same size but different dimensions is not a duplicate")
-    func exactDuplicatesRespectDimensions() {
+    @Test("A copy taken years apart is still a candidate")
+    func candidatesIgnoreCaptureTime() {
+        // The whole reason this exists. The previous fingerprint included the capture date, so
+        // it only ever matched photos that already shared a time bucket — ones the similarity
+        // scan finds anyway. This pair is five years apart and must still match.
+        let fiveYears: TimeInterval = 5 * 365 * 24 * 3600
         let records = [
-            record(id: "a", width: 4000, height: 3000, bytes: 2_048),
-            record(id: "b", width: 1000, height: 1000, bytes: 2_048),
+            copy(id: "original", takenAt: 0),
+            copy(id: "reimported", takenAt: fiveYears),
         ]
 
-        #expect(PhotoGrouping.exactDuplicateGroups(for: records).isEmpty)
+        let candidates = PhotoGrouping.exactDuplicateCandidates(for: records)
+
+        #expect(candidates.count == 1)
+        #expect(Set(candidates[0].map(\.id)) == ["original", "reimported"])
     }
 
-    @Test("Records with unknown size are skipped")
-    func exactDuplicatesSkipUnsized() {
+    @Test("Same size but different dimensions is not a candidate")
+    func candidatesRespectDimensions() {
         let records = [
-            record(id: "a", bytes: nil),
-            record(id: "b", bytes: nil),
+            copy(id: "a", takenAt: 0, width: 4000, height: 3000),
+            copy(id: "b", takenAt: 0, width: 1000, height: 1000),
         ]
 
-        #expect(PhotoGrouping.exactDuplicateGroups(for: records).isEmpty)
+        #expect(PhotoGrouping.exactDuplicateCandidates(for: records).isEmpty)
+    }
+
+    @Test("Photos with unknown size are skipped")
+    func candidatesSkipUnsized() {
+        let records = [
+            copy(id: "a", takenAt: 0, bytes: nil),
+            copy(id: "b", takenAt: 0, bytes: nil),
+        ]
+
+        #expect(PhotoGrouping.exactDuplicateCandidates(for: records).isEmpty)
+    }
+
+    @Test("Photos already in a similar group are left out")
+    func candidatesExcludeGroupedPhotos() {
+        // Otherwise one photo could sit in two groups, and be counted and offered twice.
+        let records = [
+            copy(id: "grouped", takenAt: 0),
+            copy(id: "loose", takenAt: 999_999),
+        ]
+
+        let candidates = PhotoGrouping.exactDuplicateCandidates(for: records, excluding: ["grouped"])
+
+        #expect(candidates.isEmpty)
+    }
+
+    @Test("Videos are never duplicate-photo candidates")
+    func candidatesSkipVideos() {
+        let records = [
+            copy(id: "v1", takenAt: 0, isVideo: true),
+            copy(id: "v2", takenAt: 999_999, isVideo: true),
+        ]
+
+        #expect(PhotoGrouping.exactDuplicateCandidates(for: records).isEmpty)
     }
 
     // MARK: - Best-of-group

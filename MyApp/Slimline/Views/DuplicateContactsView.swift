@@ -2,10 +2,10 @@ import SwiftUI
 
 /// Duplicate contacts, grouped, with the card we suggest keeping marked.
 ///
-/// Two actions per group, because the brief asks for both and they mean different things: *merge*
-/// folds every detail into the primary card and removes the rest, while *selecting* a card queues
-/// it for outright deletion in the review screen. Merging is the safer default and is offered
-/// first, since it never loses a phone number.
+/// Each set shows one tick, on the card being kept. Two actions per group, because the brief asks
+/// for both and they mean different things: *merge* folds every detail into the ticked card and
+/// removes the rest, while *delete* removes the others outright. Merging is the safer default and
+/// is offered first, since it never loses a phone number.
 struct DuplicateContactsView: View {
     let groups: [DuplicateContactGroup]
     let phase: ScanCoordinator.ContactPhase
@@ -122,7 +122,7 @@ struct DuplicateContactsView: View {
                 Chip(text: "\(groups.count) sets")
             }
 
-            Text("Merging folds every phone number and email onto the starred card. Tap a star to keep a different one. Contact changes can't be undone.")
+            Text("The ticked card is the one kept — tap another to keep it instead. Merge folds every phone number and email onto it; delete removes the others. Contact changes can't be undone.")
                 .font(.system(size: 12))
                 .foregroundStyle(Theme.secondaryText)
 
@@ -253,7 +253,7 @@ private struct ContactGroupCard: View {
                     .strokeBorder(Theme.divider, lineWidth: 1)
             }
 
-            mergeButton
+            actions
 
             if isMerging {
                 mergePreview
@@ -278,110 +278,130 @@ private struct ContactGroupCard: View {
         }
     }
 
+    private var isDeletingOthers: Bool { plan.isDeletingOthers(group) }
+
     private func row(for contact: ContactRecord) -> some View {
-        let isProtected = plan.isContactProtected(contact.id)
+        let isKept = plan.isContactProtected(contact.id)
         let isSelected = plan.isContactSelected(contact.id)
 
-        return HStack(spacing: 10) {
-            // A star on every row, tappable on all but the current keeper. The scan's choice is
-            // the most complete card, which is a good guess and not always the right one — the
-            // user may want their own spelling of a name, or a specific card's photo.
-            Button {
-                withAnimation(.snappy) { onMakePrimary(contact.id) }
-            } label: {
-                Image(systemName: isProtected ? "star.fill" : "star")
-                    .font(.system(size: 11, weight: .semibold))
-                    .foregroundStyle(isProtected ? .white : Theme.secondaryText)
+        // The whole row is one control: tick the card to keep. Only one can be ticked per set, so
+        // it behaves like a radio button — tapping another card moves the tick. The scan's pick is
+        // the most complete card, which is a good guess and not always the right one.
+        return Button {
+            withAnimation(.snappy) { onMakePrimary(contact.id) }
+        } label: {
+            HStack(spacing: 10) {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 11, weight: .bold))
+                    .foregroundStyle(isKept ? .white : .clear)
                     .frame(width: 22, height: 22)
-                    .background(isProtected ? Theme.accent : Theme.surface, in: .circle)
+                    .background(isKept ? Theme.accent : Theme.surface, in: .circle)
                     .overlay(
-                        Circle().strokeBorder(
-                            isProtected ? Theme.accent : Theme.divider,
-                            lineWidth: 1
-                        )
+                        Circle().strokeBorder(isKept ? Theme.accent : Theme.divider, lineWidth: 1)
                     )
-                    .frame(width: 34, height: 30)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .disabled(isProtected)
-            .accessibilityLabel(isProtected ? "Kept card" : "Keep this card instead")
 
-            // The kept card gets a blank of the same size rather than nothing, so names stay in
-            // one column instead of jumping left on whichever row happens to be starred.
-            if isProtected {
-                Circle()
-                    .fill(Theme.surface.opacity(0.5))
-                    .frame(width: 22, height: 22)
-                    .overlay(Circle().strokeBorder(Theme.divider, lineWidth: 1))
-            } else {
-                Button {
-                    plan.toggleContact(contact.id)
-                } label: {
-                    Image(systemName: "checkmark")
-                        .font(.system(size: 11, weight: .bold))
-                        .foregroundStyle(isSelected ? .white : .clear)
-                        .frame(width: 22, height: 22)
-                        .background(isSelected ? Theme.accent : Theme.surface, in: .circle)
-                        .overlay(
-                            Circle().strokeBorder(
-                                isSelected ? Theme.accent : Theme.divider,
-                                lineWidth: 1
-                            )
-                        )
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(contact.displayName)
+                        .font(.system(size: 14, weight: isKept ? .semibold : .regular))
+                        .foregroundStyle(Theme.primaryText)
+                    Text(contact.detail)
+                        .font(.system(size: 11))
+                        .foregroundStyle(Theme.secondaryText)
+                        .lineLimit(2)
                 }
-                .buttonStyle(.plain)
-                .disabled(!canToggle(contact))
-                .accessibilityLabel(isSelected ? "Selected for deletion" : "Not selected")
+
+                Spacer(minLength: 4)
+
+                if let status = status(isKept: isKept, isSelected: isSelected) {
+                    Text(status)
+                        .font(.system(size: 11, weight: .medium))
+                        .foregroundStyle(isKept ? Theme.accent : Theme.destructive)
+                }
             }
-
-            VStack(alignment: .leading, spacing: 1) {
-                Text(contact.displayName)
-                    .font(.system(size: 14, weight: isProtected ? .semibold : .regular))
-                    .foregroundStyle(Theme.primaryText)
-                Text(contact.detail)
-                    .font(.system(size: 11))
-                    .foregroundStyle(Theme.secondaryText)
-                    .lineLimit(2)
-            }
-
-            Spacer(minLength: 4)
-
-            Text(isProtected ? "Keep" : (isSelected ? "Delete" : "Review"))
-                .font(.system(size: 11, weight: .medium))
-                .foregroundStyle(isSelected ? Theme.destructive : Theme.secondaryText)
+            .padding(.horizontal, 10)
+            .padding(.vertical, 9)
+            .contentShape(.rect)
         }
-        .padding(.horizontal, 10)
-        .padding(.vertical, 9)
-        .opacity(isMerging && !isProtected ? 0.45 : 1)
+        .buttonStyle(.plain)
+        .disabled(isKept)
+        .opacity((isMerging || isSelected) && !isKept ? 0.45 : 1)
+        .accessibilityLabel(contact.displayName)
+        .accessibilityValue(isKept ? "Kept" : (status(isKept: false, isSelected: isSelected) ?? ""))
+        .accessibilityHint(isKept ? "" : "Double-tap to keep this card instead")
+        .accessibilityAddTraits(isKept ? .isSelected : [])
     }
 
-    private var mergeButton: some View {
+    /// What will happen to a card, stated only once the user has chosen an action for the set.
+    private func status(isKept: Bool, isSelected: Bool) -> String? {
+        if isKept { return "Keep" }
+        if isMerging { return "Merge" }
+        if isSelected { return "Delete" }
+        return nil
+    }
+
+    /// The two things that can happen to the unticked cards, side by side.
+    private var actions: some View {
+        HStack(spacing: 8) {
+            actionButton(
+                title: isMerging ? "Merging" : "Merge into one",
+                systemImage: isMerging ? "checkmark.circle.fill" : "arrow.triangle.merge",
+                isOn: isMerging,
+                tint: Theme.accent
+            ) {
+                plan.toggleMerge(group)
+            }
+
+            actionButton(
+                title: isDeletingOthers ? "Deleting" : "Delete \(othersLabel)",
+                systemImage: isDeletingOthers ? "checkmark.circle.fill" : "trash",
+                isOn: isDeletingOthers,
+                tint: Theme.destructive
+            ) {
+                plan.toggleDeleteOthers(group)
+            }
+        }
+    }
+
+    private var othersLabel: String {
+        group.duplicates.count == 1 ? "the other" : "other \(group.duplicates.count)"
+    }
+
+    private func actionButton(
+        title: String,
+        systemImage: String,
+        isOn: Bool,
+        tint: Color,
+        action: @escaping () -> Void
+    ) -> some View {
         Button {
-            withAnimation(.snappy) { plan.toggleMerge(group) }
+            withAnimation(.snappy) { action() }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: isMerging ? "checkmark.circle.fill" : "arrow.triangle.merge")
+                Image(systemName: systemImage)
                     .font(.system(size: 13, weight: .medium))
-                Text(isMerging ? "Merging — tap to undo" : "Merge into one contact")
+                Text(title)
                     .font(.system(size: 13, weight: .semibold))
-                Spacer()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
             }
-            .foregroundStyle(isMerging ? .white : Theme.accent)
-            .padding(.horizontal, 12)
+            .foregroundStyle(isOn ? .white : tint)
+            .frame(maxWidth: .infinity)
             .padding(.vertical, 9)
             .background(
-                isMerging ? AnyShapeStyle(Theme.accent) : AnyShapeStyle(Theme.background),
+                isOn ? AnyShapeStyle(tint) : AnyShapeStyle(Theme.background),
                 in: .rect(cornerRadius: Theme.controlCorner)
             )
             .overlay {
-                if !isMerging {
+                if !isOn {
                     RoundedRectangle(cornerRadius: Theme.controlCorner)
                         .strokeBorder(Theme.divider, lineWidth: 1)
                 }
             }
+            .contentShape(.rect)
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isOn ? .isSelected : [])
+        .accessibilityHint(isOn ? "Double-tap to undo" : "")
     }
 
     /// Shows the card the merge will produce. The same `mergedFields` call performs the merge, so
@@ -415,11 +435,5 @@ private struct ContactGroupCard: View {
                 .strokeBorder(Theme.divider, lineWidth: 1)
         }
         .transition(.opacity.combined(with: .move(edge: .top)))
-    }
-
-    /// A card already covered by a merge can't also be deleted outright — the merge needs to read
-    /// it, and counting it twice would overstate what the review screen is about to remove.
-    private func canToggle(_ contact: ContactRecord) -> Bool {
-        plan.isContactSelected(contact.id) || plan.canSelectContact(contact.id)
     }
 }

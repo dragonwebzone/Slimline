@@ -37,20 +37,20 @@ struct CleanPlanTests {
         )
     }
 
-    @Test("The keeper in a group can never be selected")
-    func keeperIsProtected() {
+    @Test("The suggested best shot can be selected like any other photo")
+    func bestShotIsSelectable() {
         let plan = CleanPlan()
         let group = group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")
         plan.register(groups: [group])
 
-        #expect(plan.isProtected("a"))
-        #expect(plan.canSelect("a") == false)
-        #expect(plan.select(record(id: "a")) == false)
-        #expect(plan.isSelected("a") == false)
+        // A suggestion, not a lock: the user may prefer to keep a different frame.
+        #expect(plan.canSelect("a"))
+        #expect(plan.select(record(id: "a")))
+        #expect(plan.isSelected("a"))
     }
 
-    @Test("Select extras leaves the keeper behind")
-    func selectExtrasSparesKeeper() {
+    @Test("Select extras leaves the best shot behind")
+    func selectExtrasSparesBestShot() {
         let plan = CleanPlan()
         let group = group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")
         plan.register(groups: [group])
@@ -63,39 +63,50 @@ struct CleanPlanTests {
         #expect(plan.totalAssetCount == 2)
     }
 
-    @Test("A group can never have every member selected")
-    func groupIsNeverEmptied() {
+    @Test("Select extras replaces a hand-picked best shot rather than failing on the last extra")
+    func selectExtrasDeselectsBestShot() {
         let plan = CleanPlan()
-        // Keeper protection is relaxed here by naming a keeper outside the group, so the
-        // never-empty rule is what's actually under test.
-        let group = SimilarPhotoGroup(
-            id: "g",
-            assets: [record(id: "a"), record(id: "b")],
-            bestAssetID: "elsewhere"
-        )
+        let group = group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")
         plan.register(groups: [group])
-
         #expect(plan.select(record(id: "a")))
-        // Selecting the second would leave nothing kept.
-        #expect(plan.canSelect("b") == false)
-        #expect(plan.select(record(id: "b")) == false)
-        #expect(plan.totalAssetCount == 1)
+
+        plan.selectExtras(in: group)
+
+        #expect(plan.isSelected("a") == false)
+        #expect(plan.isSelected("b"))
+        #expect(plan.isSelected("c"))
     }
 
-    @Test("Re-registering drops a selection that has become the keeper")
-    func rescanClearsNewlyProtectedSelection() {
+    @Test("A whole set can be selected, and is reported as such")
+    func wholeSetCanBeSelected() {
         let plan = CleanPlan()
-        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")])
+        let other = group(id: "h", memberIDs: ["d", "e"], keeper: "d")
+        let set = group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")
+        plan.register(groups: [set, other])
 
-        #expect(plan.select(record(id: "b")))
-        #expect(plan.isSelected("b"))
+        plan.selectAll(in: set)
+        #expect(plan.totalAssetCount == 3)
+        // The review screen warns from this, so it must count whole sets only.
+        #expect(plan.fullySelectedGroupCount == 1)
 
-        // A rescan promotes "b" to keeper. Silently deleting what we now call the best shot
-        // would be a real bug.
-        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "b")])
+        #expect(plan.select(record(id: "e")))
+        #expect(plan.fullySelectedGroupCount == 1)
 
-        #expect(plan.isSelected("b") == false)
-        #expect(plan.totalAssetCount == 0)
+        plan.deselectAll(in: set)
+        #expect(plan.fullySelectedGroupCount == 0)
+    }
+
+    @Test("Select extras after select all leaves just the best shot kept")
+    func selectExtrasAfterSelectAll() {
+        let plan = CleanPlan()
+        let group = group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")
+        plan.register(groups: [group])
+
+        plan.selectAll(in: group)
+        plan.selectExtras(in: group)
+
+        #expect(plan.isSelected("a") == false)
+        #expect(plan.fullySelectedGroupCount == 0)
     }
 
     @Test("Totals sum the selected bytes")
@@ -141,40 +152,6 @@ struct CleanPlanTests {
         plan.reset()
 
         #expect(plan.isEmpty)
-    }
-
-    @Test("Promoting a new keeper protects it and frees the old one")
-    func keeperChangeMovesProtection() {
-        // The user overruling the scan's pick must move the protection, not add a second one:
-        // the old keeper becomes deletable and the new one stops being.
-        let plan = CleanPlan()
-        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")])
-
-        #expect(plan.isProtected("a"))
-        #expect(plan.canSelect("b"))
-
-        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "b")])
-
-        #expect(plan.isProtected("b"))
-        #expect(plan.isProtected("a") == false)
-        #expect(plan.canSelect("a"))
-        #expect(plan.canSelect("b") == false)
-    }
-
-    @Test("Promoting a selected photo to keeper unselects it")
-    func promotingASelectedPhotoClearsIt() {
-        // Otherwise the plan would hold a photo that is simultaneously the keeper and queued for
-        // deletion, which is the exact contradiction this type exists to prevent.
-        let plan = CleanPlan()
-        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "a")])
-
-        #expect(plan.select(record(id: "b")))
-        #expect(plan.isSelected("b"))
-
-        plan.register(groups: [group(id: "g", memberIDs: ["a", "b", "c"], keeper: "b")])
-
-        #expect(plan.isSelected("b") == false)
-        #expect(plan.totalAssetCount == 0)
     }
 
     @Test("Pruning forgets assets that no longer exist")
@@ -304,6 +281,41 @@ struct CleanPlanContactTests {
 
         #expect(plan.isMerging("g") == false)
         #expect(plan.canSelectContact("b"))
+    }
+
+    @Test("Delete the others queues every card but the kept one")
+    func deleteOthersSparesKeeper() {
+        let plan = CleanPlan()
+        let group = group(id: "g", memberIDs: ["a", "b", "c"], primary: "a")
+        plan.register(contactGroups: [group])
+
+        plan.toggleDeleteOthers(group)
+
+        #expect(plan.isDeletingOthers(group))
+        #expect(plan.selectedContactIDs == ["b", "c"])
+        #expect(plan.isContactSelected("a") == false)
+
+        plan.toggleDeleteOthers(group)
+        #expect(plan.isDeletingOthers(group) == false)
+        #expect(plan.selectedContactIDs.isEmpty)
+    }
+
+    @Test("Merge and delete the others replace each other")
+    func mergeAndDeleteAreExclusive() {
+        let plan = CleanPlan()
+        let group = group(id: "g", memberIDs: ["a", "b", "c"], primary: "a")
+        plan.register(contactGroups: [group])
+
+        plan.toggleMerge(group)
+        plan.toggleDeleteOthers(group)
+        #expect(plan.isMerging("g") == false)
+        #expect(plan.isDeletingOthers(group))
+        #expect(plan.totalContactsRemoved == 2)
+
+        plan.toggleMerge(group)
+        #expect(plan.isMerging("g"))
+        #expect(plan.isDeletingOthers(group) == false)
+        #expect(plan.totalContactsRemoved == 2)
     }
 
     @Test("Totals count merged and deleted contacts without double counting")
