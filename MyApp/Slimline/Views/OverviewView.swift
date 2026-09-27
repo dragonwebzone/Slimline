@@ -240,12 +240,9 @@ struct OverviewView: View {
                     : "\(coordinator.screenshots.count) items"
             ) { onSelect(.screenshots) }
 
-            CategoryTile(
-                title: "Blurry Photos",
-                systemImage: "camera.aperture",
-                bytes: coordinator.blurryBytes,
-                detail: blurryDetail
-            ) { onSelectPhotos(.blurry) }
+            BlurryTile(coordinator: coordinator, status: coordinator.blurStatus) {
+                onSelectPhotos(.blurry)
+            }
 
             CategoryTile(
                 title: "Duplicate Contacts",
@@ -335,12 +332,6 @@ struct OverviewView: View {
         case .failed: "Couldn't be read"
         case .ready: coordinator.oldEvents.isEmpty ? "Nothing to clear" : "Older than a year"
         }
-    }
-
-    private var blurryDetail: String {
-        if coordinator.blurProgress != nil { return "Checking…" }
-        if coordinator.phase != .ready { return "Not scanned yet" }
-        return coordinator.blurryPhotos.isEmpty ? "None found" : "\(coordinator.blurryPhotos.count) photos"
     }
 
     private var contactCountLabel: String? {
@@ -489,5 +480,32 @@ struct CategoryTile: View {
     private var headline: String {
         if let countLabel { return countLabel }
         return bytes > 0 ? ByteFormatting.string(bytes) : "—"
+    }
+}
+
+/// The Blurry tile, on its own so the blur pass's progress redraws just this tile.
+///
+/// It says "Checking…" while the pass runs, which means reading the progress. Read in the
+/// Overview itself, every step re-ran the whole screen — including sorting every swipe suggestion
+/// and totalling everything reclaimable — about a hundred times per pass.
+private struct BlurryTile: View {
+    let coordinator: ScanCoordinator
+    let status: BlurStatus
+    let action: () -> Void
+
+    var body: some View {
+        CategoryTile(
+            title: "Blurry Photos",
+            systemImage: "camera.aperture",
+            bytes: coordinator.blurryBytes,
+            detail: detail,
+            action: action
+        )
+    }
+
+    private var detail: String {
+        if status.progress != nil { return "Checking…" }
+        if coordinator.phase != .ready { return "Not scanned yet" }
+        return coordinator.blurryPhotos.isEmpty ? "None found" : "\(coordinator.blurryPhotos.count) photos"
     }
 }

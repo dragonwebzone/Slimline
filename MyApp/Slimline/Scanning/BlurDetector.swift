@@ -34,23 +34,34 @@ actor BlurDetector {
         var fraction: Double { total > 0 ? Double(completed) / Double(total) : 0 }
     }
 
-    /// Below this, even the sharpest part of the photo has almost no edges.
+    /// Soft enough to call blurry when the model also leans that way.
     ///
-    /// A starting value, not a tuned one. Debug builds log every measurement so it can be set
-    /// from a real library, as the similarity threshold was.
-    nonisolated static let sharpnessThreshold: Double = 45
+    /// Was 45 with the model required at 0.7, which in practice missed plainly blurry photos:
+    /// low-light shots carry sensor noise, and noise reads as "edges" to the Laplacian, so their
+    /// sharpness sat above 45 and the model was never even asked. Debug builds log every
+    /// measurement, so these can still be tuned against a real library.
+    nonisolated static let sharpnessThreshold: Double = 70
+    nonisolated static let smudgeThreshold: Float = 0.55
+
+    /// When the model is confident, a photo this soft is blurry even with some noise or texture.
+    /// Truly sharp photos — including bokeh portraits, whose subject is crisp — score far higher.
+    nonisolated static let confidentSharpnessThreshold: Double = 150
+    nonisolated static let confidentSmudgeThreshold: Float = 0.85
+
     /// With no smudge model to corroborate, demand a much lower sharpness before saying anything.
     nonisolated static let sharpnessOnlyThreshold: Double = 18
-    nonisolated static let smudgeThreshold: Float = 0.7
+
+    /// The model only changes the verdict below this sharpness, so it isn't run above it.
+    nonisolated static var modelGate: Double { confidentSharpnessThreshold }
 
     /// Large enough that ordinary soft focus survives downscaling. At the 224px used for feature
     /// prints, a few pixels of blur in a 12-megapixel original vanishes entirely.
     private let analysisSide: CGFloat = 512
 
-    /// Four at a time, at background priority. With the model now skipped for sharp photos, each
-    /// measurement is mostly a decode, and the priority is what keeps it from competing with the
-    /// thumbnails the user is actually looking at.
-    private let maxConcurrent = 4
+    /// Two at a time, at background priority. Four kept the pass quicker but left the phone's
+    /// performance cores busy decoding, and scrolling visibly stuttered while it ran; the pass is
+    /// incremental and saved as it goes, so finishing sooner matters less than staying smooth.
+    private let maxConcurrent = 2
 
     /// Measures every record that has no still-valid cached result.
     func analyse(
@@ -62,8 +73,7 @@ actor BlurDetector {
         var pending: [AssetRecord] = []
 
         for record in records {
-            let stamp = Self.stamp(for: record)
-            if let hit = cached[record.id], hit.stamp == stamp {
+            if let hit = cached[record.id], Self.isCurrent(hit, for: record) {
                 results[record.id] = hit
             } else {
                 pending.append(record)
@@ -110,11 +120,30 @@ actor BlurDetector {
     }
 
     /// The verdict.
+    ///
+    /// Two ways to qualify, and both need the model: soft *and* hazy, or confidently hazy *and*
+    /// fairly soft. The model has the final say at the soft end, which is what keeps a clear sky
+    /// (edgeless, but not blurred) out; sharpness has it at the sharp end, which keeps bokeh out.
     nonisolated static func isBlurry(_ result: Result) -> Bool {
         if let smudge = result.smudge {
-            return result.sharpness < sharpnessThreshold && smudge >= smudgeThreshold
+            if result.sharpness < sharpnessThreshold && smudge >= smudgeThreshold { return true }
+            if result.sharpness < confidentSharpnessThreshold && smudge >= confidentSmudgeThreshold { return true }
+            return false
         }
         return result.sharpness < sharpnessOnlyThreshold
+    }
+
+    /// Whether a cached measurement can stand: the photo is unedited since, and it has every
+    /// reading the current rule needs.
+    nonisolated static func isCurrent(_ result: Result, for record: AssetRecord) -> Bool {
+        result.stamp == stamp(for: record) && !needsModel(result)
+    }
+
+    /// Whether a cached measurement predates the current rule and lacks a model reading it now
+    /// needs. Only those photos are measured again, not the whole library.
+    nonisolated static func needsModel(_ result: Result) -> Bool {
+        guard #available(iOS 26, *) else { return false }
+        return result.smudge == nil && result.sharpness < modelGate
     }
 
     // MARK: - Measurement
@@ -122,12 +151,12 @@ actor BlurDetector {
     private func measure(_ record: AssetRecord) async -> (String, Result)? {
         guard let image = await thumbnail(for: record.id) else { return nil }
 
-        let sharpness = Self.tiledSharpness(of: image)
+        let sharpness = Self.tiledSharpness(of: image, maxSide: Int(analysisSide))
         // A photo is only blurry if both signals agree, so the model is pointless for anything the
         // cheap measure already calls sharp — which is most of a library. Skipping it there is the
         // single biggest saving in the pass. A `nil` smudge on a sharp photo still reads as "not
         // blurry" in `isBlurry`, so the verdict is unchanged.
-        let smudge: Float? = sharpness < Self.sharpnessThreshold
+        let smudge: Float? = sharpness < Self.modelGate
             ? await Self.smudgeConfidence(of: image)
             : nil
 
@@ -146,9 +175,12 @@ actor BlurDetector {
     /// The maximum rather than the whole-image figure is what stops portraits being flagged: a
     /// sharp face against a deliberately soft background is a good photo, and averaging the two
     /// would call it blurry. A photo is only soft if *nothing* in it is sharp.
-    nonisolated static func tiledSharpness(of image: CGImage) -> Double {
-        let width = image.width
-        let height = image.height
+    nonisolated static func tiledSharpness(of image: CGImage, maxSide: Int = .max) -> Double {
+        // Scaled while drawing, so the measure always runs at the same resolution however large
+        // the image Photos handed back — sharpness figures are only comparable at one scale.
+        let scale = min(1, Double(maxSide) / Double(max(image.width, image.height)))
+        let width = Int((Double(image.width) * scale).rounded())
+        let height = Int((Double(image.height) * scale).rounded())
         guard width > 8, height > 8 else { return 0 }
 
         var pixels = [UInt8](repeating: 0, count: width * height)
@@ -162,6 +194,7 @@ actor BlurDetector {
                 space: CGColorSpaceCreateDeviceGray(),
                 bitmapInfo: CGImageAlphaInfo.none.rawValue
             ) else { return false }
+            context.interpolationQuality = .medium
             context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
             return true
         }
@@ -251,7 +284,10 @@ actor BlurDetector {
 
         let options = PHImageRequestOptions()
         options.deliveryMode = .highQualityFormat
-        options.resizeMode = .exact
+        // `.fast` lets Photos hand back a thumbnail it already has, at or above the size asked
+        // for, instead of producing an exact-size copy of every photo. The measure scales it down
+        // itself while drawing, which is far cheaper.
+        options.resizeMode = .fast
         // Never pulled from iCloud: nothing leaves, or arrives on, the device mid-scan.
         options.isNetworkAccessAllowed = false
         options.isSynchronous = false

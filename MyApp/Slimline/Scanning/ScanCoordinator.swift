@@ -37,9 +37,17 @@ final class ScanCoordinator {
     private(set) var oldEvents: [EventRecord] = []
     /// Photos both blur signals agree on, largest first.
     private(set) var blurryPhotos: [AssetRecord] = []
+    /// Progress of the blur pass, held in its own observable object.
+    ///
+    /// It changes up to a hundred times per pass. Stored here directly, every change invalidated
+    /// every view that read anything from the coordinator — the root view, and so all five tabs,
+    /// plus the Overview's totals — which is what made the app lag while blur ran. In its own
+    /// object, only the views that actually show the progress bar redraw.
+    let blurStatus = BlurStatus()
+
     /// Progress of the blur pass while it's measuring new photos; `nil` when idle or when every
     /// photo was already measured, so a warm start shows nothing.
-    private(set) var blurProgress: Double?
+    var blurProgress: Double? { blurStatus.progress }
     private(set) var storage: StorageSnapshot = .unknown
 
     /// Set when sizes for this category are pixel-based estimates rather than measurements, so
@@ -507,7 +515,7 @@ final class ScanCoordinator {
         // Only photos without a valid cached measurement count towards the progress bar, so a
         // resumed pass shows how much is genuinely left rather than restarting at zero.
         let pendingTotal = candidates.filter { record in
-            measured[record.id]?.stamp != BlurDetector.stamp(for: record)
+            !(measured[record.id].map { BlurDetector.isCurrent($0, for: record) } ?? false)
         }.count
 
         var done = 0
@@ -522,10 +530,12 @@ final class ScanCoordinator {
                 guard pendingTotal > 0 else { return }
                 let fraction = Double(doneBefore + progress.completed) / Double(pendingTotal)
                 Task { @MainActor [weak self] in
-                    self?.blurProgress = min(1, fraction)
+                    self?.blurStatus.progress = min(1, fraction)
                 }
             }
-            let batchPending = batch.filter { measured[$0.id]?.stamp != BlurDetector.stamp(for: $0) }.count
+            let batchPending = batch.filter { record in
+                !(measured[record.id].map { BlurDetector.isCurrent($0, for: record) } ?? false)
+            }.count
             done += batchPending
             measured.merge(results) { _, new in new }
 
@@ -538,10 +548,15 @@ final class ScanCoordinator {
             var snapshot = await snapshots.load()
             let sized = await withCachedSizes(blurryInBatch, snapshot: snapshot)
             found.append(contentsOf: sized)
-            // Filtered at publish rather than up front, so a photo kept mid-pass drops out too.
-            blurryPhotos = found
-                .filter { !kept.contains($0.id) }
-                .sorted { ($0.byteSize ?? 0) > ($1.byteSize ?? 0) }
+            // Published only when this batch found something (or on the first batch, to replace
+            // any stale list). Every assignment redraws everything that shows blurry photos, and
+            // most batches of a library find nothing new.
+            if !sized.isEmpty || start == 0 {
+                // Filtered at publish rather than up front, so a photo kept mid-pass drops out too.
+                blurryPhotos = found
+                    .filter { !kept.contains($0.id) }
+                    .sorted { ($0.byteSize ?? 0) > ($1.byteSize ?? 0) }
+            }
 
             // A warm start has nothing new to measure, so it has nothing to write either.
             guard batchPending > 0 else { continue }
@@ -553,7 +568,7 @@ final class ScanCoordinator {
         }
 
         guard !Task.isCancelled else {
-            blurProgress = nil
+            blurStatus.progress = nil
             return
         }
 
@@ -562,7 +577,7 @@ final class ScanCoordinator {
         var snapshot = await snapshots.load()
         snapshot.blur = measured.filter { live.contains($0.key) }
         await snapshots.save(snapshot)
-        blurProgress = nil
+        blurStatus.progress = nil
     }
 
     /// Promotes a different card to be the one kept in its duplicate-contact group.
@@ -677,4 +692,11 @@ final class ScanCoordinator {
 
         plan.register(contactGroups: duplicateContacts)
     }
+}
+
+/// The blur pass's progress, observed separately from the rest of the scan results.
+@Observable
+final class BlurStatus {
+    /// `nil` when the pass isn't measuring anything.
+    var progress: Double?
 }

@@ -128,7 +128,7 @@ struct RootView: View {
                     sizesAreEstimated: coordinator.photoSizesAreEstimated,
                     plan: coordinator.plan,
                     blurryPhotos: coordinator.blurryPhotos,
-                    blurProgress: coordinator.blurProgress,
+                    blurStatus: coordinator.blurStatus,
                     filter: $photosFilter
                 )
                 .navigationTitle("Similar Photos")

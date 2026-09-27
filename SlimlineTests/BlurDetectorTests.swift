@@ -93,6 +93,42 @@ struct BlurDetectorTests {
         #expect(BlurDetector.isBlurry(clearlySoft))
     }
 
+    @Test("A noisy but blurred low-light photo is caught when the model is confident")
+    func noisyBlurIsCaught() {
+        // Sensor noise lifts the sharpness above the old 45 cut-off, which is what let these
+        // through before. A confident model reading now carries it.
+        let nightShot = BlurDetector.Result(stamp: 0, sharpness: 110, smudge: 0.9)
+
+        #expect(BlurDetector.isBlurry(nightShot))
+    }
+
+    @Test("Moderately soft and moderately hazy is blurry")
+    func moderateAgreementIsBlurry() {
+        let soft = BlurDetector.Result(stamp: 0, sharpness: 60, smudge: 0.6)
+
+        #expect(BlurDetector.isBlurry(soft))
+    }
+
+    @Test("A fairly soft photo the model is unsure about is left alone")
+    func unsureModelSparesSoftPhoto() {
+        let soft = BlurDetector.Result(stamp: 0, sharpness: 110, smudge: 0.6)
+
+        #expect(BlurDetector.isBlurry(soft) == false)
+    }
+
+    @Test("Only old readings that lack the model are measured again")
+    func onlyIncompleteReadingsAreRedone() {
+        let unmeasuredSoft = BlurDetector.Result(stamp: 0, sharpness: 100, smudge: nil)
+        let sharp = BlurDetector.Result(stamp: 0, sharpness: 900, smudge: nil)
+        let complete = BlurDetector.Result(stamp: 0, sharpness: 100, smudge: 0.2)
+
+        if #available(iOS 26, *) {
+            #expect(BlurDetector.needsModel(unmeasuredSoft))
+        }
+        #expect(BlurDetector.needsModel(sharp) == false)
+        #expect(BlurDetector.needsModel(complete) == false)
+    }
+
     @Test("Degenerate images don't crash")
     func tinyImagesAreSafe() {
         #expect(BlurDetector.tiledSharpness(gray: [0, 0, 0, 0], width: 2, height: 2) == 0)

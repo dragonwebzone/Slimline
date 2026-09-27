@@ -10,8 +10,9 @@ struct SimilarPhotosView: View {
     let plan: CleanPlan
     /// Photos both blur signals agree on. Not a group: each stands alone.
     var blurryPhotos: [AssetRecord] = []
-    /// Non-`nil` while the blur pass is still measuring new photos.
-    var blurProgress: Double?
+    /// The blur pass's progress. Read only by the small views that show it, so a progress step
+    /// redraws a progress bar rather than this whole screen.
+    var blurStatus = BlurStatus()
 
     /// Owned by the root view so the Overview's Blurry tile can land on the right segment.
     @Binding var filter: Filter
@@ -50,12 +51,8 @@ struct SimilarPhotosView: View {
         }
         .overlay {
             if filter == .blurry {
-                if visibleBlurry.isEmpty && blurProgress == nil {
-                    ContentUnavailableView(
-                        "No blurry photos",
-                        systemImage: "camera.aperture",
-                        description: Text("Nothing in your library looks out of focus.")
-                    )
+                if visibleBlurry.isEmpty {
+                    NoBlurryPhotos(status: blurStatus)
                 }
             } else if groups.isEmpty {
                 ContentUnavailableView(
@@ -196,18 +193,7 @@ struct SimilarPhotosView: View {
 
     @ViewBuilder
     private var blurryGrid: some View {
-        if let blurProgress {
-            VStack(alignment: .leading, spacing: 8) {
-                HStack(spacing: 8) {
-                    ProgressView().controlSize(.small)
-                    Text("Checking photos for blur…")
-                        .font(.system(size: 13, weight: .medium))
-                        .foregroundStyle(Theme.primaryText)
-                }
-                ProgressView(value: blurProgress).tint(Theme.accent)
-            }
-            .card(padding: 12)
-        }
+        BlurProgressCard(status: blurStatus)
 
         LazyVGrid(columns: blurColumns, spacing: 8) {
             ForEach(visibleBlurry) { record in
@@ -215,6 +201,41 @@ struct SimilarPhotosView: View {
                     plan.toggle(record)
                 }
             }
+        }
+    }
+}
+
+/// The blur pass's progress bar, on its own so each step redraws only this.
+private struct BlurProgressCard: View {
+    let status: BlurStatus
+
+    var body: some View {
+        if let progress = status.progress {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("Checking photos for blur…")
+                        .font(.system(size: 13, weight: .medium))
+                        .foregroundStyle(Theme.primaryText)
+                }
+                ProgressView(value: progress).tint(Theme.accent)
+            }
+            .card(padding: 12)
+        }
+    }
+}
+
+/// The empty state, shown only once the pass has finished and found nothing.
+private struct NoBlurryPhotos: View {
+    let status: BlurStatus
+
+    var body: some View {
+        if status.progress == nil {
+            ContentUnavailableView(
+                "No blurry photos",
+                systemImage: "camera.aperture",
+                description: Text("Nothing in your library looks out of focus.")
+            )
         }
     }
 }
